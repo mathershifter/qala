@@ -1,0 +1,15 @@
+services:
+  voucher:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - .data:/data
+  swagger-ui:
+    image: docker.swagger.io/swaggerapi/swagger-ui
+    ports:
+      - "8081:8080"
+    environment:
+      SWAGGER_JSON: /openapi.yaml
+    volumes:
+      - ./api/v1/openapi.yaml:/openapi.yaml

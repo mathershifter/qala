@@ -1,0 +1,635 @@
+openapi: "3.0.3"
+
+info:
+  title: seacrt Certificate Management API
+  description: >
+    seacrt is a lightweight Certificate Signing Service (CSS) for lab environments.
+    It operates a two-tier CA hierarchy (Root + Intermediate) and issues TLS server
+    certificates and mTLS client authentication certificates. All certificate records
+    are persisted in a local SQLite database.
+
+    Private keys are returned exactly once at issuance and are never stored by the
+    service. The caller is responsible for storing keys securely.
+  version: "1.0.0"
+  contact:
+    name: Jesse Mather
+
+servers:
+  - url: "http://{host}:8080"
+    description: seacrt REST API
+    variables:
+      host:
+        default: localhost
+        description: Hostname or IP address where the seacrt server is running
+
+paths:
+
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      description: >
+        Returns 200 OK when the service is running and ready to handle requests.
+        Use this endpoint for liveness probes.
+      tags:
+        - Operations
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: "ok"
+
+  /ca-chain:
+    get:
+      operationId: getCAChain
+      summary: Retrieve the CA certificate chain
+      description: >
+        Returns the PEM bundle containing the Intermediate CA certificate followed
+        by the Root CA certificate. Clients should install this bundle as a trusted
+        CA anchor to validate certificates issued by this service.
+      tags:
+        - CA
+      responses:
+        "200":
+          description: PEM-encoded CA chain (intermediate + root)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CAChainResponse"
+              example:
+                chain_pem: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /sign/server:
+    post:
+      operationId: signServer
+      summary: Issue a TLS server certificate
+      description: >
+        Generates a new TLS server certificate signed by the Intermediate CA.
+        The certificate profile includes the TLS Web Server Authentication extended
+        key usage (1.3.6.1.5.5.7.3.1). At least one of `dns_names` or `ip_addresses`
+        must be provided as Subject Alternative Names.
+
+        The private key is included in the response exactly once and is never stored
+        by the service. The caller must store it securely.
+
+        Returns 409 Conflict if an active (non-expired) certificate already exists
+        for the given common name and type. The conflicting serial number is included
+        in the response body.
+      tags:
+        - Certificates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServerRequest"
+            example:
+              common_name: "my-service.lab.internal"
+              dns_names:
+                - "my-service.lab.internal"
+                - "my-service"
+              ip_addresses:
+                - "10.0.0.42"
+              key_algorithm: "ecdsa"
+              validity_days: 90
+      responses:
+        "201":
+          description: Certificate issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssuedCert"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /sign/client:
+    post:
+      operationId: signClient
+      summary: Issue a client authentication certificate
+      description: >
+        Generates a new client authentication certificate signed by the Intermediate
+        CA. The certificate profile includes the TLS Web Client Authentication extended
+        key usage (1.3.6.1.5.5.7.3.2). The common name represents the client identity
+        (e.g. a username or service name).
+
+        The private key is included in the response exactly once and is never stored
+        by the service. The caller must store it securely.
+
+        Returns 409 Conflict if an active (non-expired) certificate already exists
+        for the given common name and type. The conflicting serial number is included
+        in the response body.
+      tags:
+        - Certificates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientRequest"
+            example:
+              common_name: "alice"
+              key_algorithm: "ecdsa"
+              validity_days: 90
+      responses:
+        "201":
+          description: Certificate issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssuedCert"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /certs:
+    get:
+      operationId: listCerts
+      summary: List issued certificates
+      description: >
+        Returns a paginated list of certificate summaries. By default only active
+        (non-expired) certificates are returned. Use `expired=true` to include
+        expired certificates. Results can be filtered by certificate type.
+      tags:
+        - Certificates
+      parameters:
+        - name: type
+          in: query
+          required: false
+          description: Filter results to only server or client certificates.
+          schema:
+            $ref: "#/components/schemas/CertType"
+        - name: expired
+          in: query
+          required: false
+          description: >
+            When `true`, include expired certificates in the results.
+            Defaults to `false` (only active certificates are returned).
+          schema:
+            type: boolean
+            default: false
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of results to return. Defaults to 100.
+          schema:
+            type: integer
+            minimum: 0
+            default: 100
+        - name: offset
+          in: query
+          required: false
+          description: Number of results to skip for pagination. Defaults to 0.
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Paginated list of certificate summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertListResponse"
+              example:
+                certs:
+                  - serial: "3a2f1b..."
+                    type: "server"
+                    common_name: "my-service.lab.internal"
+                    issued_at: "2026-04-01T12:00:00Z"
+                    expires_at: "2026-07-01T12:00:00Z"
+                total: 1
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /certs/by-cn:
+    get:
+      operationId: getCertByCN
+      summary: Look up a certificate by common name
+      description: >
+        Returns the most recent active certificate matching the given common name
+        and certificate type. Both `type` and `cn` are required. The private key
+        field will be empty because keys are never persisted after issuance.
+      tags:
+        - Certificates
+      parameters:
+        - name: type
+          in: query
+          required: true
+          description: The type of certificate to look up.
+          schema:
+            $ref: "#/components/schemas/CertType"
+        - name: cn
+          in: query
+          required: true
+          description: The common name (CN) of the certificate to look up.
+          schema:
+            type: string
+            example: "my-service.lab.internal"
+      responses:
+        "200":
+          description: Certificate found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssuedCertStored"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /certs/{serial}:
+    get:
+      operationId: getCert
+      summary: Get a certificate by serial number
+      description: >
+        Returns the full certificate record for the given serial number, including
+        the public certificate PEM and chain PEM. The private key field will be
+        empty because keys are never persisted after issuance.
+      tags:
+        - Certificates
+      parameters:
+        - $ref: "#/components/parameters/SerialPath"
+      responses:
+        "200":
+          description: Certificate found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssuedCertStored"
+              example:
+                serial: "3a2f1b..."
+                type: "server"
+                common_name: "my-service.lab.internal"
+                certificate_pem: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+                private_key_pem: ""
+                chain_pem: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+                issued_at: "2026-04-01T12:00:00Z"
+                expires_at: "2026-07-01T12:00:00Z"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteCert
+      summary: Delete a certificate record
+      description: >
+        Removes the certificate record from the database by serial number.
+        This does not revoke the certificate — seacrt does not implement CRL or OCSP.
+        Returns 204 No Content on success.
+      tags:
+        - Certificates
+      parameters:
+        - $ref: "#/components/parameters/SerialPath"
+      responses:
+        "204":
+          description: Certificate record deleted successfully
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+
+  parameters:
+    SerialPath:
+      name: serial
+      in: path
+      required: true
+      description: Hex-encoded certificate serial number.
+      schema:
+        type: string
+        example: "3a2f1b4c..."
+
+  schemas:
+
+    KeyAlgorithm:
+      type: string
+      enum:
+        - ecdsa
+        - rsa
+      description: >
+        Key algorithm to use when generating the certificate key pair.
+        `ecdsa` uses ECDSA P-256; `rsa` uses RSA 2048. Defaults to `ecdsa`.
+
+    CertType:
+      type: string
+      enum:
+        - server
+        - client
+      description: >
+        Distinguishes TLS server certificates (for HTTPS/TLS) from client
+        authentication certificates (for mTLS).
+
+    ServerRequest:
+      type: object
+      required:
+        - common_name
+      description: >
+        Parameters for issuing a TLS server certificate. At least one of
+        `dns_names` or `ip_addresses` must be provided.
+      properties:
+        common_name:
+          type: string
+          description: >
+            The Certificate Subject Common Name (CN). Typically the primary
+            DNS name for the service.
+          example: "my-service.lab.internal"
+        dns_names:
+          type: array
+          items:
+            type: string
+          description: >
+            DNS Subject Alternative Names (SANs). At least one of `dns_names`
+            or `ip_addresses` is required.
+          example:
+            - "my-service.lab.internal"
+            - "my-service"
+        ip_addresses:
+          type: array
+          items:
+            type: string
+            format: ipv4
+          description: >
+            IP address Subject Alternative Names (SANs). At least one of
+            `dns_names` or `ip_addresses` is required.
+          example:
+            - "10.0.0.42"
+        key_algorithm:
+          $ref: "#/components/schemas/KeyAlgorithm"
+          default: ecdsa
+        validity_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          default: 90
+          description: >
+            Number of days the certificate should be valid. Must be between
+            1 and 365 inclusive. Defaults to 90.
+
+    ClientRequest:
+      type: object
+      required:
+        - common_name
+      description: Parameters for issuing a client authentication certificate.
+      properties:
+        common_name:
+          type: string
+          description: >
+            The identity of the client, used as the Certificate Subject Common
+            Name (CN). Typically a username or service account name.
+          example: "alice"
+        key_algorithm:
+          $ref: "#/components/schemas/KeyAlgorithm"
+          default: ecdsa
+        validity_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          default: 90
+          description: >
+            Number of days the certificate should be valid. Must be between
+            1 and 365 inclusive. Defaults to 90.
+
+    IssuedCert:
+      type: object
+      description: >
+        The result of a successful certificate issuance. The `private_key_pem`
+        field is populated exactly once in this response and is never stored by
+        the service. The caller must persist it securely.
+      properties:
+        serial:
+          type: string
+          description: Hex-encoded certificate serial number assigned by the CA.
+          example: "3a2f1b4c..."
+        type:
+          $ref: "#/components/schemas/CertType"
+        common_name:
+          type: string
+          description: The Certificate Subject Common Name (CN).
+          example: "my-service.lab.internal"
+        certificate_pem:
+          type: string
+          description: PEM-encoded signed leaf certificate.
+          example: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+        private_key_pem:
+          type: string
+          description: >
+            PEM-encoded private key for the issued certificate. Returned exactly
+            once at issuance. The service does not persist this value — the caller
+            is solely responsible for storing it securely.
+          example: "-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
+        chain_pem:
+          type: string
+          description: >
+            PEM bundle containing the Intermediate CA certificate followed by
+            the Root CA certificate. Append this to the leaf certificate when
+            configuring TLS to provide a complete trust chain.
+          example: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+        issued_at:
+          type: string
+          format: date-time
+          description: UTC timestamp when the certificate was issued.
+          example: "2026-04-01T12:00:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          description: UTC timestamp when the certificate expires.
+          example: "2026-07-01T12:00:00Z"
+
+    IssuedCertStored:
+      type: object
+      description: >
+        A certificate record as returned from GET endpoints. Identical to
+        `IssuedCert` except `private_key_pem` is always empty because the
+        private key is never persisted after initial issuance.
+      properties:
+        serial:
+          type: string
+          description: Hex-encoded certificate serial number.
+          example: "3a2f1b4c..."
+        type:
+          $ref: "#/components/schemas/CertType"
+        common_name:
+          type: string
+          description: The Certificate Subject Common Name (CN).
+          example: "my-service.lab.internal"
+        certificate_pem:
+          type: string
+          description: PEM-encoded signed leaf certificate.
+          example: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+        private_key_pem:
+          type: string
+          description: >
+            Always empty on GET responses. The private key is never stored by
+            the service and cannot be retrieved after initial issuance.
+          example: ""
+        chain_pem:
+          type: string
+          description: >
+            PEM bundle containing the Intermediate CA certificate followed by
+            the Root CA certificate.
+          example: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+        issued_at:
+          type: string
+          format: date-time
+          description: UTC timestamp when the certificate was issued.
+          example: "2026-04-01T12:00:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          description: UTC timestamp when the certificate expires.
+          example: "2026-07-01T12:00:00Z"
+
+    Summary:
+      type: object
+      description: >
+        Lightweight projection of a certificate record used in list responses.
+        Contains no PEM fields.
+      properties:
+        serial:
+          type: string
+          description: Hex-encoded certificate serial number.
+          example: "3a2f1b4c..."
+        type:
+          $ref: "#/components/schemas/CertType"
+        common_name:
+          type: string
+          description: The Certificate Subject Common Name (CN).
+          example: "my-service.lab.internal"
+        issued_at:
+          type: string
+          format: date-time
+          description: UTC timestamp when the certificate was issued.
+          example: "2026-04-01T12:00:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          description: UTC timestamp when the certificate expires.
+          example: "2026-07-01T12:00:00Z"
+
+    CertListResponse:
+      type: object
+      description: Paginated list of certificate summaries.
+      properties:
+        certs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Summary"
+          description: The list of certificate summaries matching the query.
+        total:
+          type: integer
+          description: Total number of results in the current response (not the full dataset count).
+          example: 42
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+          description: Service health status. Always `"ok"` when the service is running.
+          example: "ok"
+
+    CAChainResponse:
+      type: object
+      properties:
+        chain_pem:
+          type: string
+          description: >
+            PEM bundle containing the Intermediate CA certificate followed by
+            the Root CA certificate. Install this as a trusted CA anchor to
+            validate certificates issued by this service.
+          example: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+
+    ErrorResponse:
+      type: object
+      description: Standard error response body returned for all 4xx and 5xx responses.
+      properties:
+        error:
+          type: string
+          description: Human-readable description of the error.
+          example: "certificate not found"
+
+    ConflictResponse:
+      type: object
+      description: >
+        Error response returned when a 409 Conflict occurs because an active
+        certificate already exists for the requested common name and type.
+      properties:
+        error:
+          type: string
+          description: Human-readable description of the conflict.
+          example: "active certificate already exists for this CN"
+        serial:
+          type: string
+          description: Serial number of the existing conflicting certificate.
+          example: "3a2f1b4c..."
+
+  responses:
+
+    BadRequest:
+      description: >
+        The request was malformed or contained invalid field values (e.g. missing
+        required fields, out-of-range validity_days, unrecognised key_algorithm).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "common_name is required"
+
+    NotFound:
+      description: No certificate record was found matching the given serial or common name.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "not found"
+
+    Conflict:
+      description: >
+        An active (non-expired) certificate already exists for the requested
+        common name and certificate type. The `serial` field identifies the
+        existing certificate.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ConflictResponse"
+          example:
+            error: "active certificate already exists for this CN"
+            serial: "3a2f1b4c..."
+
+    InternalError:
+      description: An unexpected server-side error occurred.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "internal error"
+
+tags:
+  - name: Operations
+    description: Service health and operational endpoints
+  - name: CA
+    description: Certificate Authority chain endpoints
+  - name: Certificates
+    description: Certificate issuance, retrieval, listing, and deletion
