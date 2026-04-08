@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/ca"
+	"gitlab.aristanetworks.com/jmather/qala/internal/ca"
 )
 
 func newInitCmd(opts *rootOptions) *cobra.Command {

@@ -13,11 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	api "gitlab.aristanetworks.com/jmather/seacrt/internal/api/v1"
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/ca"
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/cert"
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/ports"
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/store"
+	api "gitlab.aristanetworks.com/jmather/qala/internal/api/v1"
+	"gitlab.aristanetworks.com/jmather/qala/internal/ca"
+	"gitlab.aristanetworks.com/jmather/qala/internal/cert"
+	"gitlab.aristanetworks.com/jmather/qala/internal/ports"
+	"gitlab.aristanetworks.com/jmather/qala/internal/store"
 )
 
 func newServeCmd(opts *rootOptions) *cobra.Command {
@@ -31,10 +31,10 @@ func newServeCmd(opts *rootOptions) *cobra.Command {
 
 			loadedCA, err := ca.Load(opts.DataDir, logger)
 			if err != nil {
-				return fmt.Errorf("load CA: %w (run 'seacrt init' first)", err)
+				return fmt.Errorf("load CA: %w (run 'qala init' first)", err)
 			}
 
-			dbPath := filepath.Join(opts.DataDir, "seacrt.db")
+			dbPath := filepath.Join(opts.DataDir, "qala.db")
 			st, err := store.New(dbPath, logger)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
@@ -54,7 +54,7 @@ func newServeCmd(opts *rootOptions) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&addr, "addr",
-		envOrDefault("SEACRT_ADDR", "0.0.0.0:8080"), "listen address")
+		envOrDefault("QALA_ADDR", "0.0.0.0:8080"), "listen address")
 
 	return cmd
 }

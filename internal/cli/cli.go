@@ -10,7 +10,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/cert"
+	"gitlab.aristanetworks.com/jmather/qala/internal/cert"
 )
 
 // rootOptions holds flags shared across all subcommands.
@@ -31,7 +31,7 @@ func Execute() {
 
 func newRootCmd(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "seacrt",
+		Use:   "qala",
 		Short: "Certificate signing service for lab environments",
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			// Validate log level here so subcommands can rely on it being correct.
@@ -45,11 +45,11 @@ func newRootCmd(opts *rootOptions) *cobra.Command {
 	}
 
 	cmd.PersistentFlags().StringVar(&opts.DataDir, "data-dir",
-		envOrDefault("SEACRT_DATA_DIR", "./data"), "path to CA keys, certs, and database")
+		envOrDefault("QALA_DATA_DIR", "./data"), "path to CA keys, certs, and database")
 	cmd.PersistentFlags().StringVar(&opts.LogLevel, "log-level",
-		envOrDefault("SEACRT_LOG_LEVEL", "info"), "log level: debug, info, warn, error")
+		envOrDefault("QALA_LOG_LEVEL", "info"), "log level: debug, info, warn, error")
 	cmd.PersistentFlags().StringVar(&opts.APIURL, "api-url",
-		envOrDefault("SEACRT_API_URL", "http://localhost:8080"), "seacrt server URL (for client commands)")
+		envOrDefault("QALA_API_URL", "http://localhost:8080"), "qala server URL (for client commands)")
 
 	cmd.AddCommand(
 		newInitCmd(opts),

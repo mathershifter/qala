@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/cert"
+	"gitlab.aristanetworks.com/jmather/qala/internal/cert"
 	_ "modernc.org/sqlite"
 )
 

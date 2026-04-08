@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/cert"
+	"gitlab.aristanetworks.com/jmather/qala/internal/cert"
 )
 
 // CertService is the interface the Server requires for certificate operations.

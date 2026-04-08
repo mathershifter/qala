@@ -14,14 +14,14 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/cert"
+	"gitlab.aristanetworks.com/jmather/qala/internal/cert"
 )
 
 // --- fakes ---
 
 type fakeSigner struct {
-	signFn    func(template *x509.Certificate, pub any) (*x509.Certificate, error)
-	chainPEM  string
+	signFn   func(template *x509.Certificate, pub any) (*x509.Certificate, error)
+	chainPEM string
 }
 
 func (f *fakeSigner) Sign(template *x509.Certificate, pub any) (*x509.Certificate, error) {
@@ -183,10 +183,10 @@ func TestIssueServer(t *testing.T) {
 			name: "duplicate CN returns ErrCNAlreadyActive",
 			req:  cert.ServerRequest{CommonName: "exists.lab", DNSNames: []string{"exists.lab"}},
 			seed: []cert.IssuedCert{{
-				Serial:    "preexisting",
-				Type:      cert.TypeServer,
+				Serial:     "preexisting",
+				Type:       cert.TypeServer,
 				CommonName: "exists.lab",
-				ExpiresAt: time.Now().Add(90 * 24 * time.Hour),
+				ExpiresAt:  time.Now().Add(90 * 24 * time.Hour),
 			}},
 			wantErr: cert.ErrCNAlreadyActive,
 		},
@@ -331,10 +331,10 @@ func TestDelete(t *testing.T) {
 			st := &fakeStore{}
 			if tt.seed {
 				st.saved = []cert.IssuedCert{{
-					Serial:    tt.serial,
-					Type:      cert.TypeServer,
+					Serial:     tt.serial,
+					Type:       cert.TypeServer,
 					CommonName: "svc.lab",
-					ExpiresAt: time.Now().Add(90 * 24 * time.Hour),
+					ExpiresAt:  time.Now().Add(90 * 24 * time.Hour),
 				}}
 			}
 			svc := cert.NewService(newRealSigner(t), st, testLogger())

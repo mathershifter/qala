@@ -10,14 +10,14 @@ RUN go mod download
 COPY . .
 
 # modernc.org/sqlite is pure Go — no CGo needed.
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /seacrt ./cmd/seacrt
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /qala ./cmd/qala
 
 # ── Run stage ──
 FROM alpine:3
 
 RUN apk add --no-cache ca-certificates
 
-COPY --from=builder /seacrt /usr/local/bin/seacrt
+COPY --from=builder /qala /usr/local/bin/qala
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
@@ -25,9 +25,9 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Mount a volume here to persist state across container restarts.
 VOLUME /data
 
-ENV SEACRT_DATA_DIR=/data \
-    SEACRT_ADDR=0.0.0.0:8080 \
-    SEACRT_LOG_LEVEL=info
+ENV QALA_DATA_DIR=/data \
+    QALA_ADDR=0.0.0.0:8080 \
+    QALA_LOG_LEVEL=info
 
 EXPOSE 8080
 

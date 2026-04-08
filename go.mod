@@ -1,4 +1,4 @@
-module gitlab.aristanetworks.com/jmather/seacrt
+module gitlab.aristanetworks.com/jmather/qala
 
 go 1.26.0
 

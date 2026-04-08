@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/ca"
+	"gitlab.aristanetworks.com/jmather/qala/internal/ca"
 )
 
 func testLogger() *slog.Logger {

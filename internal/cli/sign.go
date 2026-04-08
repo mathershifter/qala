@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/cert"
+	"gitlab.aristanetworks.com/jmather/qala/internal/cert"
 )
 
 func newSignCmd(opts *rootOptions) *cobra.Command {

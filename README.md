@@ -1,4 +1,4 @@
-# seacrt
+# qala
 
 A lightweight Certificate Signing Service for lab environments. Runs a two-tier CA (Root + Intermediate) and exposes a REST API and CLI for issuing TLS server and mTLS client certificates. All state is stored in a single SQLite database — no external dependencies required.
 
@@ -18,19 +18,19 @@ A lightweight Certificate Signing Service for lab environments. Runs a two-tier 
 
 ```sh
 # 1. Initialize the CA (run once)
-seacrt init
+qala init
 
 # 2. Start the server
-seacrt serve
+qala serve
 
 # 3. Issue a server certificate
-seacrt sign server --cn api.lab --dns api.lab --dns api --ip 10.0.0.10 --out ./certs/api
+qala sign server --cn api.lab --dns api.lab --dns api --ip 10.0.0.10 --out ./certs/api
 
 # 4. Issue a client auth certificate
-seacrt sign client --cn alice --out ./certs/alice
+qala sign client --cn alice --out ./certs/alice
 
 # 5. Trust the CA in your environment
-seacrt ca-chain --out /usr/local/share/ca-certificates/seacrt.pem
+qala ca-chain --out /usr/local/share/ca-certificates/qala.pem
 ```
 
 ---
@@ -40,13 +40,13 @@ seacrt ca-chain --out /usr/local/share/ca-certificates/seacrt.pem
 Requires Go 1.22+. No CGo — the binary is fully statically linked.
 
 ```sh
-go build -o seacrt ./cmd/seacrt
+go build -o qala ./cmd/qala
 ```
 
 Compile for Linux + trim paths + strip symbols and DWARF:
 
 ```sh
-CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o seacrt ./cmd/seacrt
+CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o qala ./cmd/qala
 ```
 
 ---
@@ -58,13 +58,13 @@ The Docker image handles `init` automatically on first start. Mount a volume at 
 ```sh
 # First run: initializes CA, then starts the server
 docker run -d \
-  --name seacrt \
-  -v seacrt-data:/data \
+  --name qala \
+  -v qala-data:/data \
   -p 8080:8080 \
-  seacrt:latest
+  qala:latest
 
 # Use the CLI against a running container
-docker exec seacrt seacrt sign server \
+docker exec qala qala sign server \
   --cn api.lab \
   --dns api.lab \
   --api-url http://localhost:8080
@@ -73,16 +73,16 @@ docker exec seacrt seacrt sign server \
 Build the image:
 
 ```sh
-docker build -t seacrt:latest .
+docker build -t qala:latest .
 ```
 
 Environment variables supported in Docker (see [Configuration](#configuration)):
 
 | Variable | Default |
 |---|---|
-| `SEACRT_DATA_DIR` | `/data` |
-| `SEACRT_ADDR` | `0.0.0.0:8080` |
-| `SEACRT_LOG_LEVEL` | `info` |
+| `QALA_DATA_DIR` | `/data` |
+| `QALA_ADDR` | `0.0.0.0:8080` |
+| `QALA_LOG_LEVEL` | `info` |
 
 ---
 
@@ -92,18 +92,18 @@ All commands share these global flags:
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--data-dir` | `SEACRT_DATA_DIR` | `./data` | CA keys, certs, and SQLite database |
-| `--log-level` | `SEACRT_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
-| `--api-url` | `SEACRT_API_URL` | `http://localhost:8080` | Server URL for client commands |
+| `--data-dir` | `QALA_DATA_DIR` | `./data` | CA keys, certs, and SQLite database |
+| `--log-level` | `QALA_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `--api-url` | `QALA_API_URL` | `http://localhost:8080` | Server URL for client commands |
 
 ---
 
-### `seacrt init`
+### `qala init`
 
 Generates the Root CA and Intermediate CA key pairs and certificates. Run once before starting the server.
 
 ```sh
-seacrt init [--data-dir ./data]
+qala init [--data-dir ./data]
 ```
 
 Output files written to `--data-dir`:
@@ -119,36 +119,36 @@ Returns an error if the CA files already exist.
 
 ---
 
-### `seacrt serve`
+### `qala serve`
 
 Starts the REST API server. Requires the CA to be initialized first.
 
 ```sh
-seacrt serve [--data-dir ./data] [--addr 0.0.0.0:8080]
+qala serve [--data-dir ./data] [--addr 0.0.0.0:8080]
 ```
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--addr` | `SEACRT_ADDR` | `0.0.0.0:8080` | Listen address |
+| `--addr` | `QALA_ADDR` | `0.0.0.0:8080` | Listen address |
 
 ```sh
 # Listen on a non-default port
-seacrt serve --addr 127.0.0.1:9000
+qala serve --addr 127.0.0.1:9000
 
 # Debug logging
-seacrt serve --log-level debug
+qala serve --log-level debug
 ```
 
 Handles `SIGINT` and `SIGTERM` with a 10-second graceful drain.
 
 ---
 
-### `seacrt sign server`
+### `qala sign server`
 
 Issues a TLS server certificate. Requires at least one DNS name or IP address.
 
 ```sh
-seacrt sign server --cn <common-name> [flags]
+qala sign server --cn <common-name> [flags]
 ```
 
 | Flag | Default | Description |
@@ -173,31 +173,31 @@ Output files written to `--out`:
 
 ```sh
 # DNS SAN only
-seacrt sign server --cn api.lab --dns api.lab --out ./certs/api
+qala sign server --cn api.lab --dns api.lab --out ./certs/api
 
 # Multiple DNS names
-seacrt sign server --cn api.lab --dns api.lab --dns api --out ./certs/api
+qala sign server --cn api.lab --dns api.lab --dns api --out ./certs/api
 
 # DNS and IP SANs
-seacrt sign server --cn api.lab --dns api.lab --ip 10.0.0.10 --out ./certs/api
+qala sign server --cn api.lab --dns api.lab --ip 10.0.0.10 --out ./certs/api
 
 # RSA key, 30-day validity
-seacrt sign server --cn api.lab --dns api.lab --algo rsa --days 30 --out ./certs/api
+qala sign server --cn api.lab --dns api.lab --algo rsa --days 30 --out ./certs/api
 
 # Retrieve existing cert instead of erroring on duplicate CN
-seacrt sign server --cn api.lab --dns api.lab --reuse --out ./certs/api
+qala sign server --cn api.lab --dns api.lab --reuse --out ./certs/api
 ```
 
 If an active certificate already exists for the CN, the command exits with an error. Pass `--reuse` to retrieve the existing certificate and key instead.
 
 ---
 
-### `seacrt sign client`
+### `qala sign client`
 
 Issues a client authentication (mTLS) certificate.
 
 ```sh
-seacrt sign client --cn <identity> [flags]
+qala sign client --cn <identity> [flags]
 ```
 
 | Flag | Default | Description |
@@ -212,26 +212,26 @@ seacrt sign client --cn <identity> [flags]
 
 ```sh
 # Issue a cert for user "alice"
-seacrt sign client --cn alice --out ./certs/alice
+qala sign client --cn alice --out ./certs/alice
 
 # Issue for a service account
-seacrt sign client --cn worker-svc --out ./certs/worker
+qala sign client --cn worker-svc --out ./certs/worker
 
 # 365-day cert with RSA key
-seacrt sign client --cn alice --algo rsa --days 365 --out ./certs/alice
+qala sign client --cn alice --algo rsa --days 365 --out ./certs/alice
 
 # Retrieve existing cert if already issued
-seacrt sign client --cn alice --reuse --out ./certs/alice
+qala sign client --cn alice --reuse --out ./certs/alice
 ```
 
 ---
 
-### `seacrt list`
+### `qala list`
 
 Lists issued certificates.
 
 ```sh
-seacrt list [--type server|client] [--expired]
+qala list [--type server|client] [--expired]
 ```
 
 | Flag | Description |
@@ -243,13 +243,13 @@ seacrt list [--type server|client] [--expired]
 
 ```sh
 # List all active certificates
-seacrt list
+qala list
 
 # List only server certificates
-seacrt list --type server
+qala list --type server
 
 # List all client certificates including expired ones
-seacrt list --type client --expired
+qala list --type client --expired
 ```
 
 Sample output:
@@ -264,35 +264,35 @@ Total: 2
 
 ---
 
-### `seacrt delete`
+### `qala delete`
 
-Deletes a certificate record by serial. The serial is shown in `seacrt list` output and is returned by all sign responses.
+Deletes a certificate record by serial. The serial is shown in `qala list` output and is returned by all sign responses.
 
 ```sh
-seacrt delete <serial>
+qala delete <serial>
 ```
 
 **Examples:**
 
 ```sh
 # Delete by serial
-seacrt delete 3a2f1b...
+qala delete 3a2f1b...
 
 # Common pattern: look up the serial first, then delete
-seacrt list --type server
-seacrt delete 3a2f1b...
+qala list --type server
+qala delete 3a2f1b...
 ```
 
 After deletion the CN is free to be re-issued. There is no revocation — if the certificate was distributed to clients, remove it from those trust stores separately.
 
 ---
 
-### `seacrt ca-chain`
+### `qala ca-chain`
 
 Fetches the CA certificate chain (Intermediate + Root) from the server.
 
 ```sh
-seacrt ca-chain [--out <file>]
+qala ca-chain [--out <file>]
 ```
 
 | Flag | Description |
@@ -303,17 +303,17 @@ seacrt ca-chain [--out <file>]
 
 ```sh
 # Print to stdout
-seacrt ca-chain
+qala ca-chain
 
 # Save to file
-seacrt ca-chain --out /etc/ssl/certs/seacrt-chain.pem
+qala ca-chain --out /etc/ssl/certs/qala-chain.pem
 
 # Trust on Debian/Ubuntu
-seacrt ca-chain --out /usr/local/share/ca-certificates/seacrt.crt
+qala ca-chain --out /usr/local/share/ca-certificates/qala.crt
 sudo update-ca-certificates
 
 # Trust on RHEL/Fedora
-seacrt ca-chain --out /etc/pki/ca-trust/source/anchors/seacrt.pem
+qala ca-chain --out /etc/pki/ca-trust/source/anchors/qala.pem
 sudo update-ca-trust
 ```
 
@@ -552,10 +552,10 @@ All settings can be provided as flags or environment variables.
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--data-dir` | `SEACRT_DATA_DIR` | `./data` | CA keys, certs, and database |
-| `--addr` | `SEACRT_ADDR` | `0.0.0.0:8080` | Server listen address |
-| `--log-level` | `SEACRT_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
-| `--api-url` | `SEACRT_API_URL` | `http://localhost:8080` | Server URL for CLI client commands |
+| `--data-dir` | `QALA_DATA_DIR` | `./data` | CA keys, certs, and database |
+| `--addr` | `QALA_ADDR` | `0.0.0.0:8080` | Server listen address |
+| `--log-level` | `QALA_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `--api-url` | `QALA_API_URL` | `http://localhost:8080` | Server URL for CLI client commands |
 
 ---
 
@@ -567,5 +567,5 @@ All settings can be provided as flags or environment variables.
   root-ca.cert.pem            Root CA certificate
   intermediate-ca.key.pem     Intermediate CA private key
   intermediate-ca.cert.pem    Intermediate CA certificate
-  seacrt.db                   SQLite database (cert records + private keys)
+  qala.db                   SQLite database (cert records + private keys)
 ```

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/cert"
+	"gitlab.aristanetworks.com/jmather/qala/internal/cert"
 )
 
 // ---------------------------------------------------------------------------
@@ -67,11 +67,11 @@ func (m *mockCAChainer) ChainPEM() string {
 // ---------------------------------------------------------------------------
 
 var (
-	testNow       = time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
-	testExpires   = time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
-	testChainPEM  = "-----BEGIN CERTIFICATE-----\nchain\n-----END CERTIFICATE-----"
-	testCertPEM   = "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----"
-	testSerial    = "0a1b2c3d"
+	testNow        = time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	testExpires    = time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
+	testChainPEM   = "-----BEGIN CERTIFICATE-----\nchain\n-----END CERTIFICATE-----"
+	testCertPEM    = "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----"
+	testSerial     = "0a1b2c3d"
 	testCommonName = "example.com"
 )
 

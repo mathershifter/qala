@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/cert"
-	"gitlab.aristanetworks.com/jmather/seacrt/internal/store"
+	"gitlab.aristanetworks.com/jmather/qala/internal/cert"
+	"gitlab.aristanetworks.com/jmather/qala/internal/store"
 )
 
 func testLogger() *slog.Logger {
@@ -45,8 +45,8 @@ func makeIssuedCert(serial string, certType cert.CertType, cn string, expired bo
 
 func TestSaveAndGet(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    cert.IssuedCert
+		name  string
+		input cert.IssuedCert
 	}{
 		{
 			name:  "server cert round-trips",
@@ -201,10 +201,10 @@ func TestGetActiveByCN(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		certType  cert.CertType
-		cn        string
-		wantFound bool
+		name       string
+		certType   cert.CertType
+		cn         string
+		wantFound  bool
 		wantSerial string
 	}{
 		{
@@ -259,10 +259,10 @@ func TestGetActiveByCN(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	tests := []struct {
-		name      string
-		serial    string
-		seed      bool // whether to seed the cert before deleting
-		wantErr   bool
+		name    string
+		serial  string
+		seed    bool // whether to seed the cert before deleting
+		wantErr bool
 	}{
 		{
 			name:    "deletes existing certificate",

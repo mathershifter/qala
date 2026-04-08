@@ -1,9 +1,9 @@
 openapi: "3.0.3"
 
 info:
-  title: seacrt Certificate Management API
+  title: Qala Certificate Management API
   description: >
-    seacrt is a lightweight Certificate Signing Service (CSS) for lab environments.
+    Qala is a lightweight Certificate Signing Service (CSS) for lab environments.
     It operates a two-tier CA hierarchy (Root + Intermediate) and issues TLS server
     certificates and mTLS client authentication certificates. All certificate records
     are persisted in a local SQLite database.
@@ -16,11 +16,11 @@ info:
 
 servers:
   - url: "http://{host}:8080"
-    description: seacrt REST API
+    description: Qala REST API
     variables:
       host:
         default: localhost
-        description: Hostname or IP address where the seacrt server is running
+        description: Hostname or IP address where the Qala server is running
 
 paths:
 
@@ -290,7 +290,7 @@ paths:
       summary: Delete a certificate record
       description: >
         Removes the certificate record from the database by serial number.
-        This does not revoke the certificate — seacrt does not implement CRL or OCSP.
+        This does not revoke the certificate — Qala does not implement CRL or OCSP.
         Returns 204 No Content on success.
       tags:
         - Certificates

@@ -62,8 +62,8 @@ func Init(dataDir string, logger *slog.Logger) error {
 	rootTemplate := &x509.Certificate{
 		SerialNumber: rootSerial,
 		Subject: pkix.Name{
-			CommonName:   "seacrt Root CA",
-			Organization: []string{"seacrt Lab"},
+			CommonName:   "Qala Root CA",
+			Organization: []string{"Qala Lab"},
 		},
 		NotBefore:             time.Now().UTC(),
 		NotAfter:              time.Now().UTC().Add(10 * 365 * 24 * time.Hour),
@@ -96,8 +96,8 @@ func Init(dataDir string, logger *slog.Logger) error {
 	intTemplate := &x509.Certificate{
 		SerialNumber: intSerial,
 		Subject: pkix.Name{
-			CommonName:   "seacrt Intermediate CA",
-			Organization: []string{"seacrt Lab"},
+			CommonName:   "Qala Intermediate CA",
+			Organization: []string{"qala Lab"},
 		},
 		NotBefore:             time.Now().UTC(),
 		NotAfter:              time.Now().UTC().Add(5 * 365 * 24 * time.Hour),

@@ -8,7 +8,7 @@ tmp_dir = "tmp"
 [build]
   args_bin = []
   bin = "./tmp/main"
-  cmd = "go build -o ./tmp/main ./cmd/seacrt/main.go"
+  cmd = "go build -o ./tmp/main ./cmd/qala/main.go"
   delay = 1000
   entrypoint = ["./tmp/main", "--data-dir", ".data", "--log-level", "debug", "serve"]
   exclude_dir = ["assets", "tmp", "vendor", "testdata", ".data"]
