@@ -171,12 +171,30 @@ paths:
           description: Filter results to only server or client certificates.
           schema:
             $ref: "#/components/schemas/CertType"
+        - name: active
+          in: query
+          required: false
+          description: >
+            When `true`, include active certificates in the results.
+            Defaults to `true` (active certificates are returned).
+          schema:
+            type: boolean
+            default: true
         - name: expired
           in: query
           required: false
           description: >
             When `true`, include expired certificates in the results.
             Defaults to `false` (only active certificates are returned).
+          schema:
+            type: boolean
+            default: false
+        - name: revoked
+          in: query
+          required: false
+          description: >
+            When `true`, include revoked certificates in the results.
+            Defaults to `false` (revoked certificates are hidden by default).
           schema:
             type: boolean
             default: false
@@ -290,7 +308,8 @@ paths:
       summary: Delete a certificate record
       description: >
         Removes the certificate record from the database by serial number.
-        This does not revoke the certificate — Qala does not implement CRL or OCSP.
+        This permanently deletes the record and does not revoke the certificate.
+        To revoke a certificate and add it to the CRL, use `POST /certs/{serial}/revoke`.
         Returns 204 No Content on success.
       tags:
         - Certificates
@@ -301,6 +320,99 @@ paths:
           description: Certificate record deleted successfully
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /certs/{serial}/revoke:
+    post:
+      operationId: revokeCert
+      summary: Revoke a certificate
+      description: >
+        Marks the certificate as revoked, records the revocation reason, and regenerates
+        the CRL signed by the Intermediate CA. The certificate record is retained in the
+        database for audit purposes and CRL inclusion.
+
+        Returns 409 Conflict if the certificate has already been revoked.
+      tags:
+        - Revocation
+      parameters:
+        - $ref: "#/components/parameters/SerialPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeRequest"
+            example:
+              reason: "keyCompromise"
+      responses:
+        "200":
+          description: Certificate revoked successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevokeResponse"
+              example:
+                serial: "3a2f1b4c..."
+                revoked_at: "2026-04-08T14:00:00Z"
+                reason: "keyCompromise"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Certificate has already been revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "certificate is already revoked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /crl:
+    get:
+      operationId: getCRL
+      summary: Get the current CRL (DER)
+      description: >
+        Returns the current Certificate Revocation List signed by the Intermediate CA,
+        encoded in DER format. The CRL is regenerated each time a certificate is revoked
+        and is valid for 24 hours from the last revocation (or from service startup if
+        no revocations have occurred).
+
+        Use this URL as the `cRLDistributionPoints` value in leaf certificate templates.
+        For a PEM-encoded CRL suitable for operator use, see `GET /crl.pem`.
+      tags:
+        - Revocation
+      responses:
+        "200":
+          description: DER-encoded CRL
+          content:
+            application/pkix-crl:
+              schema:
+                type: string
+                format: binary
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /crl.pem:
+    get:
+      operationId: getCRLPEM
+      summary: Get the current CRL (PEM)
+      description: >
+        Returns the current Certificate Revocation List signed by the Intermediate CA,
+        encoded in PEM format. Convenience variant of `GET /crl` for operator use.
+      tags:
+        - Revocation
+      responses:
+        "200":
+          description: PEM-encoded CRL
+          content:
+            application/x-pem-file:
+              schema:
+                type: string
+                example: "-----BEGIN X509 CRL-----\n...\n-----END X509 CRL-----\n"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -495,6 +607,8 @@ components:
           format: date-time
           description: UTC timestamp when the certificate expires.
           example: "2026-07-01T12:00:00Z"
+        revocation:
+          $ref: "#/components/schemas/RevocationInfo"
 
     Summary:
       type: object
@@ -522,6 +636,8 @@ components:
           format: date-time
           description: UTC timestamp when the certificate expires.
           example: "2026-07-01T12:00:00Z"
+        revocation:
+          $ref: "#/components/schemas/RevocationInfo"
 
     CertListResponse:
       type: object
@@ -536,6 +652,57 @@ components:
           type: integer
           description: Total number of results in the current response (not the full dataset count).
           example: 42
+
+    RevocationReason:
+      type: string
+      enum:
+        - unspecified
+        - keyCompromise
+        - affiliationChanged
+        - superseded
+        - cessationOfOperation
+        - certificateHold
+      description: >
+        RFC 5280 CRL reason code name. Defaults to `unspecified` when omitted.
+
+    RevocationInfo:
+      type: object
+      description: >
+        Present on a certificate record when the certificate has been revoked.
+        Omitted (null) when the certificate is active.
+      properties:
+        revoked_at:
+          type: string
+          format: date-time
+          description: UTC timestamp when the certificate was revoked.
+          example: "2026-04-08T14:00:00Z"
+        reason:
+          $ref: "#/components/schemas/RevocationReason"
+
+    RevokeRequest:
+      type: object
+      description: >
+        Optional request body for `POST /certs/{serial}/revoke`. All fields are
+        optional; omitting the body or the `reason` field defaults to `unspecified`.
+      properties:
+        reason:
+          $ref: "#/components/schemas/RevocationReason"
+
+    RevokeResponse:
+      type: object
+      description: Confirmation returned after a successful revocation.
+      properties:
+        serial:
+          type: string
+          description: Hex-encoded serial number of the revoked certificate.
+          example: "3a2f1b4c..."
+        revoked_at:
+          type: string
+          format: date-time
+          description: UTC timestamp when the certificate was revoked.
+          example: "2026-04-08T14:00:00Z"
+        reason:
+          $ref: "#/components/schemas/RevocationReason"
 
     HealthResponse:
       type: object
@@ -633,3 +800,5 @@ tags:
     description: Certificate Authority chain endpoints
   - name: Certificates
     description: Certificate issuance, retrieval, listing, and deletion
+  - name: Revocation
+    description: Certificate revocation and CRL distribution

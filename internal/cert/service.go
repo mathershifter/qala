@@ -23,6 +23,10 @@ type Signer interface {
 	ChainPEM() string
 }
 
+type Revoker interface {
+	Revoke(serial string, revokedAt time.Time, reason string) error
+}
+
 // Store is the interface the Service requires from the persistence layer.
 type Store interface {
 	Save(ctx context.Context, c IssuedCert) error
@@ -30,6 +34,8 @@ type Store interface {
 	Get(ctx context.Context, serial string) (IssuedCert, error)
 	GetActiveByCN(ctx context.Context, certType CertType, cn string) (IssuedCert, error)
 	Delete(ctx context.Context, serial string) error
+	Revoke(ctx context.Context, serial string, revokedAt time.Time, reason string) error
+	ListRevoked(ctx context.Context) ([]Summary, error)
 }
 
 // Service issues and retrieves certificates.
@@ -220,6 +226,19 @@ func (s *Service) Delete(ctx context.Context, serial string) error {
 	}
 	s.logger.Info("certificate deleted", "serial", serial)
 	return nil
+}
+
+func (s *Service) Revoke(ctx context.Context, serial string, reason string) (Summary, error) {
+	revokedAt := time.Now().UTC()
+	if err := s.store.Revoke(ctx, serial, revokedAt, reason); err != nil {
+		return Summary{}, err
+	}
+	s.logger.Info("certificate revoked", "serial", serial)
+	return Summary{
+		Serial:           serial,
+		RevokedAt:        revokedAt,
+		RevocationReason: reason,
+	}, nil
 }
 
 // --- internal helpers ---

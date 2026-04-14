@@ -28,6 +28,7 @@ type mockCertService struct {
 	get         func(ctx context.Context, serial string) (cert.IssuedCert, error)
 	getByCN     func(ctx context.Context, certType cert.CertType, cn string) (cert.IssuedCert, error)
 	delete      func(ctx context.Context, serial string) error
+	revoke      func(ctx context.Context, serial string, revokedAt time.Time, reason RevocationReason)
 }
 
 func (m *mockCertService) IssueServer(ctx context.Context, req cert.ServerRequest) (cert.IssuedCert, error) {
@@ -54,12 +55,24 @@ func (m *mockCertService) Delete(ctx context.Context, serial string) error {
 	return m.delete(ctx, serial)
 }
 
+func (m *mockCertService) Revoke(ctx context.Context, serial string, reason string) (cert.Summary, error) {
+	return cert.Summary{}, nil
+}
+
 type mockCAChainer struct {
 	chainPEM string
 }
 
 func (m *mockCAChainer) ChainPEM() string {
 	return m.chainPEM
+}
+
+type mockCRLService struct {
+	crl []byte
+}
+
+func (m *mockCRLService) CurrentCRL() []byte {
+	return m.crl
 }
 
 // ---------------------------------------------------------------------------
@@ -71,14 +84,15 @@ var (
 	testExpires    = time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
 	testChainPEM   = "-----BEGIN CERTIFICATE-----\nchain\n-----END CERTIFICATE-----"
 	testCertPEM    = "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----"
+	testCRL        = []byte{}
 	testSerial     = "0a1b2c3d"
 	testCommonName = "example.com"
 )
 
 // newTestServer builds a handler wired to the provided mocks.
-func newTestServer(svc CertService, ca CAChainer) http.Handler {
+func newTestServer(svc CertService, ca CAChainer, cs CRLService) http.Handler {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server := NewCertsService(svc, ca, logger)
+	server := NewCertsService(svc, ca, cs, logger)
 	return HandlerWithOptions(server, StdHTTPServerOptions{
 		ErrorHandlerFunc: JSONErrorHandler,
 	})
@@ -87,6 +101,10 @@ func newTestServer(svc CertService, ca CAChainer) http.Handler {
 // defaultCA returns a simple mock CAChainer.
 func defaultCA() *mockCAChainer {
 	return &mockCAChainer{chainPEM: testChainPEM}
+}
+
+func defaultCRL() *mockCRLService {
+	return &mockCRLService{crl: testCRL}
 }
 
 // sampleIssuedCert returns a populated IssuedCert for reuse in tests.
@@ -160,7 +178,7 @@ func assertJSONError(t *testing.T, rr *httptest.ResponseRecorder) {
 // ---------------------------------------------------------------------------
 
 func TestGetHealth(t *testing.T) {
-	h := newTestServer(&mockCertService{}, defaultCA())
+	h := newTestServer(&mockCertService{}, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/health", nil)
 
 	assertStatus(t, rr, http.StatusOK)
@@ -181,7 +199,7 @@ func TestGetHealth(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetCAChain(t *testing.T) {
-	h := newTestServer(&mockCertService{}, defaultCA())
+	h := newTestServer(&mockCertService{}, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/ca-chain", nil)
 
 	assertStatus(t, rr, http.StatusOK)
@@ -211,7 +229,7 @@ func TestSignServer_HappyPath(t *testing.T) {
 			return issued, nil
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 
 	body := jsonBody(t, map[string]any{
 		"common_name": testCommonName,
@@ -242,7 +260,7 @@ func TestSignServer_HappyPath(t *testing.T) {
 }
 
 func TestSignServer_InvalidJSON(t *testing.T) {
-	h := newTestServer(&mockCertService{}, defaultCA())
+	h := newTestServer(&mockCertService{}, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodPost, "/sign/server", strings.NewReader("not-json{{{"))
 	assertStatus(t, rr, http.StatusBadRequest)
 }
@@ -254,7 +272,7 @@ func TestSignServer_CNConflict(t *testing.T) {
 			return cert.IssuedCert{}, conflictErr
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 
 	body := jsonBody(t, map[string]any{"common_name": testCommonName, "dns_names": []string{"example.com"}})
 	rr := do(t, h, http.MethodPost, "/sign/server", body)
@@ -278,7 +296,7 @@ func TestSignServer_InvalidRequest(t *testing.T) {
 			return cert.IssuedCert{}, fmt.Errorf("dns_names required: %w", cert.ErrInvalidRequest)
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 
 	body := jsonBody(t, map[string]any{"common_name": testCommonName})
 	rr := do(t, h, http.MethodPost, "/sign/server", body)
@@ -291,7 +309,7 @@ func TestSignServer_ServiceError(t *testing.T) {
 			return cert.IssuedCert{}, errors.New("unexpected storage failure")
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 
 	body := jsonBody(t, map[string]any{"common_name": testCommonName, "dns_names": []string{"example.com"}})
 	rr := do(t, h, http.MethodPost, "/sign/server", body)
@@ -312,7 +330,7 @@ func TestSignClient_HappyPath(t *testing.T) {
 			return issued, nil
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 
 	body := jsonBody(t, map[string]any{"common_name": testCommonName})
 	rr := do(t, h, http.MethodPost, "/sign/client", body)
@@ -331,7 +349,7 @@ func TestSignClient_HappyPath(t *testing.T) {
 }
 
 func TestSignClient_InvalidJSON(t *testing.T) {
-	h := newTestServer(&mockCertService{}, defaultCA())
+	h := newTestServer(&mockCertService{}, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodPost, "/sign/client", strings.NewReader("{bad"))
 	assertStatus(t, rr, http.StatusBadRequest)
 }
@@ -343,7 +361,7 @@ func TestSignClient_CNConflict(t *testing.T) {
 			return cert.IssuedCert{}, conflictErr
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 
 	body := jsonBody(t, map[string]any{"common_name": "alice"})
 	rr := do(t, h, http.MethodPost, "/sign/client", body)
@@ -364,7 +382,7 @@ func TestSignClient_InvalidRequest(t *testing.T) {
 			return cert.IssuedCert{}, fmt.Errorf("validity_days out of range: %w", cert.ErrInvalidRequest)
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 
 	body := jsonBody(t, map[string]any{"common_name": testCommonName})
 	rr := do(t, h, http.MethodPost, "/sign/client", body)
@@ -377,7 +395,7 @@ func TestSignClient_ServiceError(t *testing.T) {
 			return cert.IssuedCert{}, errors.New("disk full")
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 
 	body := jsonBody(t, map[string]any{"common_name": testCommonName})
 	rr := do(t, h, http.MethodPost, "/sign/client", body)
@@ -403,7 +421,7 @@ func TestListCerts_HappyPath(t *testing.T) {
 			return summaries, nil
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs", nil)
 
 	assertStatus(t, rr, http.StatusOK)
@@ -435,7 +453,7 @@ func TestListCerts_EmptyList(t *testing.T) {
 			return []cert.Summary{}, nil
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs", nil)
 
 	assertStatus(t, rr, http.StatusOK)
@@ -456,7 +474,7 @@ func TestListCerts_TypeFilter(t *testing.T) {
 			return []cert.Summary{}, nil
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs?type=server", nil)
 
 	assertStatus(t, rr, http.StatusOK)
@@ -477,12 +495,12 @@ func TestListCerts_ExpiredFilter(t *testing.T) {
 			return []cert.Summary{}, nil
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs?expired=true", nil)
 
 	assertStatus(t, rr, http.StatusOK)
 
-	if !capturedFilter.IncludeExpired {
+	if !capturedFilter.Expired {
 		t.Errorf("expected IncludeExpired=true, got false")
 	}
 }
@@ -493,7 +511,7 @@ func TestListCerts_ServiceError(t *testing.T) {
 			return nil, errors.New("database unavailable")
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs", nil)
 	assertStatus(t, rr, http.StatusInternalServerError)
 }
@@ -515,7 +533,7 @@ func TestGetCertByCN_HappyPath(t *testing.T) {
 			return issued, nil
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs/by-cn?type=server&cn="+testCommonName, nil)
 
 	assertStatus(t, rr, http.StatusOK)
@@ -532,21 +550,21 @@ func TestGetCertByCN_HappyPath(t *testing.T) {
 }
 
 func TestGetCertByCN_MissingType(t *testing.T) {
-	h := newTestServer(&mockCertService{}, defaultCA())
+	h := newTestServer(&mockCertService{}, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs/by-cn?cn="+testCommonName, nil)
 	assertStatus(t, rr, http.StatusBadRequest)
 	assertJSONError(t, rr)
 }
 
 func TestGetCertByCN_MissingCN(t *testing.T) {
-	h := newTestServer(&mockCertService{}, defaultCA())
+	h := newTestServer(&mockCertService{}, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs/by-cn?type=server", nil)
 	assertStatus(t, rr, http.StatusBadRequest)
 	assertJSONError(t, rr)
 }
 
 func TestGetCertByCN_InvalidType(t *testing.T) {
-	h := newTestServer(&mockCertService{}, defaultCA())
+	h := newTestServer(&mockCertService{}, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs/by-cn?type=invalid&cn=foo", nil)
 	assertStatus(t, rr, http.StatusBadRequest)
 }
@@ -557,7 +575,7 @@ func TestGetCertByCN_NotFound(t *testing.T) {
 			return cert.IssuedCert{}, cert.ErrNotFound
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs/by-cn?type=server&cn=nobody", nil)
 	assertStatus(t, rr, http.StatusNotFound)
 }
@@ -572,7 +590,7 @@ func TestGetCertByCN_ClientType(t *testing.T) {
 			return issued, nil
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs/by-cn?type=client&cn=alice", nil)
 
 	assertStatus(t, rr, http.StatusOK)
@@ -599,7 +617,7 @@ func TestGetCert_HappyPath(t *testing.T) {
 			return issued, nil
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs/"+testSerial, nil)
 
 	assertStatus(t, rr, http.StatusOK)
@@ -630,7 +648,7 @@ func TestGetCert_NotFound(t *testing.T) {
 			return cert.IssuedCert{}, cert.ErrNotFound
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs/nonexistent", nil)
 	assertStatus(t, rr, http.StatusNotFound)
 }
@@ -648,7 +666,7 @@ func TestDeleteCert_HappyPath(t *testing.T) {
 			return nil
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodDelete, "/certs/"+testSerial, nil)
 	assertStatus(t, rr, http.StatusNoContent)
 }
@@ -659,7 +677,7 @@ func TestDeleteCert_NotFound(t *testing.T) {
 			return cert.ErrNotFound
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodDelete, "/certs/nonexistent", nil)
 	assertStatus(t, rr, http.StatusNotFound)
 }
@@ -704,7 +722,7 @@ func TestResponsesHaveJSONContentType(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newTestServer(tc.setup(), defaultCA())
+			h := newTestServer(tc.setup(), defaultCA(), defaultCRL())
 			rr := do(t, h, tc.method, tc.path, tc.body)
 			ct := rr.Header().Get("Content-Type")
 			if !strings.HasPrefix(ct, "application/json") {
@@ -724,7 +742,7 @@ func TestErrorResponseShape_NotFound(t *testing.T) {
 			return cert.IssuedCert{}, cert.ErrNotFound
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs/missing", nil)
 
 	assertStatus(t, rr, http.StatusNotFound)
@@ -743,7 +761,7 @@ func TestErrorResponseShape_InternalError(t *testing.T) {
 			return cert.IssuedCert{}, errors.New("boom")
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 	rr := do(t, h, http.MethodGet, "/certs/any", nil)
 
 	assertStatus(t, rr, http.StatusInternalServerError)
@@ -767,7 +785,7 @@ func TestConflictResponseCarriesSerial(t *testing.T) {
 			return cert.IssuedCert{}, &cert.CNConflictError{CommonName: "web.internal", Serial: wantSerial}
 		},
 	}
-	h := newTestServer(svc, defaultCA())
+	h := newTestServer(svc, defaultCA(), defaultCRL())
 
 	body := jsonBody(t, map[string]any{"common_name": "web.internal", "dns_names": []string{"web.internal"}})
 	rr := do(t, h, http.MethodPost, "/sign/server", body)

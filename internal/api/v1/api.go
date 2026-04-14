@@ -3,8 +3,10 @@ package v1
 //go:generate go tool oapi-codegen -config oapi-codegen.yaml ../../../api/v1/openapi.yaml
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -18,8 +20,13 @@ type CertService interface {
 	IssueClient(ctx context.Context, req cert.ClientRequest) (cert.IssuedCert, error)
 	List(ctx context.Context, filter cert.ListFilter) ([]cert.Summary, error)
 	Get(ctx context.Context, serial string) (cert.IssuedCert, error)
+	Revoke(ctx context.Context, serial string, reason string) (cert.Summary, error)
 	GetByCN(ctx context.Context, certType cert.CertType, cn string) (cert.IssuedCert, error)
 	Delete(ctx context.Context, serial string) error
+}
+
+type CRLService interface {
+	CurrentCRL() []byte // DER
 }
 
 // CAChainer provides the CA certificate chain PEM for the /ca-chain endpoint.
@@ -33,12 +40,13 @@ var _ ServerInterface = (*CertsServer)(nil)
 type CertsServer struct {
 	certs  CertService
 	ca     CAChainer
+	cs     CRLService
 	logger *slog.Logger
 }
 
 // NewServer constructs a Server.
-func NewCertsService(svc CertService, ca CAChainer, logger *slog.Logger) *CertsServer {
-	return &CertsServer{certs: svc, ca: ca, logger: logger}
+func NewCertsService(svc CertService, ca CAChainer, cs CRLService, logger *slog.Logger) *CertsServer {
+	return &CertsServer{certs: svc, ca: ca, cs: cs, logger: logger}
 }
 
 // Retrieve the CA certificate chain
@@ -56,6 +64,7 @@ func (s *CertsServer) GetCAChain(w http.ResponseWriter, r *http.Request) {
 func (s *CertsServer) ListCerts(w http.ResponseWriter, r *http.Request, params ListCertsParams) {
 	limit := 100
 	offset := 0
+	revoked := false
 	expired := false
 
 	if params.Limit != nil {
@@ -72,10 +81,15 @@ func (s *CertsServer) ListCerts(w http.ResponseWriter, r *http.Request, params L
 		expired = *params.Expired
 	}
 
+	if params.Revoked != nil {
+		revoked = *params.Revoked
+	}
+
 	filter := cert.ListFilter{
-		IncludeExpired: expired,
-		Limit:          limit,
-		Offset:         offset,
+		Expired: expired,
+		Revoked: revoked,
+		Limit:   limit,
+		Offset:  offset,
 	}
 
 	if t := params.Type; t != nil && *t != "" {
@@ -175,6 +189,57 @@ func (s *CertsServer) GetHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// Get DER-encoded CRL
+// (GET /crl)
+func (s *CertsServer) GetCRL(w http.ResponseWriter, r *http.Request) {
+	der := s.cs.CurrentCRL()
+	w.Header().Set("Content-Type", "application/pkix-crl")
+	w.WriteHeader(http.StatusOK)
+	w.Write(der)
+}
+
+// Get PEM-encoded CRL
+// (GET /crl.pem)
+func (s *CertsServer) GetCRLPEM(w http.ResponseWriter, r *http.Request) {
+	der := s.cs.CurrentCRL()
+	block := &pem.Block{
+		Type:  "X509 CRL", // Change based on data type
+		Bytes: der,
+	}
+
+	var b bytes.Buffer
+	if err := pem.Encode(&b, block); err != nil {
+		s.handleServiceError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.WriteHeader(http.StatusOK)
+	w.Write(b.Bytes())
+}
+
+// Revokes a cert, returns RevokeResponse; 409 if already
+// (POST /certs/{serial}/revoke)
+func (s *CertsServer) RevokeCert(w http.ResponseWriter, r *http.Request, serial SerialPath) {
+	var req cert.RevokeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	revoked, err := s.certs.Revoke(r.Context(), string(serial), req.Reason)
+	if err != nil {
+		s.handleServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, &RevokeResponse{
+		Reason:    new(RevocationReason(revoked.RevocationReason)),
+		RevokedAt: &revoked.RevokedAt,
+		Serial:    &revoked.Serial,
+	})
 }
 
 // Issue a client authentication certificate

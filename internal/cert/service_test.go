@@ -75,6 +75,25 @@ func (f *fakeStore) Delete(_ context.Context, serial string) error {
 	return cert.ErrNotFound
 }
 
+func (f *fakeStore) Revoke(_ context.Context, serial string, revokedAt time.Time, reason string) error {
+	for i, c := range f.saved {
+		if c.Serial == serial {
+			c.RevokedAt = new(time.Now().UTC())
+			c.RevocationReason = string(reason)
+			f.saved[i] = c
+			return nil
+		}
+	}
+	return cert.ErrNotFound
+}
+
+func (f *fakeStore) ListRevoked(ctx context.Context) ([]cert.Summary, error) {
+
+	return f.List(ctx, cert.ListFilter{
+		Revoked: true,
+	})
+}
+
 // realSigner builds a minimal self-signed CA and uses it to sign leaf certs.
 // This exercises the PEM encoding paths in the service.
 type realSigner struct {

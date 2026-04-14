@@ -26,6 +26,7 @@ type CA struct {
 	intermediateKey  *ecdsa.PrivateKey
 	intermediateCert *x509.Certificate
 	rootCert         *x509.Certificate
+	crl              *x509.RevocationList
 }
 
 const (
@@ -67,7 +68,7 @@ func Init(dataDir string, logger *slog.Logger) error {
 		},
 		NotBefore:             time.Now().UTC(),
 		NotAfter:              time.Now().UTC().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		KeyUsage:              x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}
@@ -101,7 +102,7 @@ func Init(dataDir string, logger *slog.Logger) error {
 		},
 		NotBefore:             time.Now().UTC(),
 		NotAfter:              time.Now().UTC().Add(5 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		MaxPathLen:            0,
@@ -113,7 +114,11 @@ func Init(dataDir string, logger *slog.Logger) error {
 		return fmt.Errorf("create intermediate certificate: %w", err)
 	}
 
-	// Write all four files.
+	// crl, err := ca.initCRL()
+	// if err != nil {
+	// 	return fmt.Errorf("failed to initialize CRL: %w", err)
+	// }
+
 	if err := writeKeyFile(filepath.Join(dataDir, rootKeyFile), rootKey); err != nil {
 		return fmt.Errorf("write root key: %w", err)
 	}
@@ -126,14 +131,18 @@ func Init(dataDir string, logger *slog.Logger) error {
 	if err := writeCertFile(filepath.Join(dataDir, intCertFile), intDER); err != nil {
 		return fmt.Errorf("write intermediate cert: %w", err)
 	}
+	// if err := writeCRLFile(filepath.Join(dataDir, crlFile), crl); err != nil {
+	// 	return fmt.Errorf("write CRL: %w", err)
+	// }
 
 	logger.Info("CA initialized", "data_dir", dataDir)
+
 	return nil
 }
 
 // Load reads the Intermediate CA key and both CA certificates from dataDir
 // and returns a CA ready to sign leaf certificates.
-func Load(dataDir string, logger *slog.Logger) (*CA, error) {
+func LoadCA(dataDir string, logger *slog.Logger) (*CA, error) {
 	intKey, err := loadECKey(filepath.Join(dataDir, intKeyFile))
 	if err != nil {
 		return nil, fmt.Errorf("load intermediate key: %w", err)
@@ -173,6 +182,26 @@ func (c *CA) Sign(template *x509.Certificate, pub any) (*x509.Certificate, error
 	return cert, nil
 }
 
+func (c *CA) SignCRL(template *x509.RevocationList) (*x509.RevocationList, error) {
+	der, err := x509.CreateRevocationList(rand.Reader, template, c.intermediateCert, c.intermediateKey)
+	if err != nil {
+		return nil, fmt.Errorf("sign revocation list: %w", err)
+	}
+
+	return x509.ParseRevocationList(der)
+}
+
+func (c *CA) CheckSignatureWith(fn func(*x509.Certificate) error) error {
+	return fn(c.intermediateCert)
+}
+
+func (c *CA) Signed(cert *x509.Certificate) bool {
+	if err := cert.CheckSignatureFrom(c.intermediateCert); err != nil {
+		return false
+	}
+	return true
+}
+
 // CertPEM returns the DER-encoded certificate as a PEM string.
 func (c *CA) CertPEM(cert *x509.Certificate) string {
 	return string(pem.EncodeToMemory(&pem.Block{
@@ -204,12 +233,19 @@ func writeKeyFile(path string, key *ecdsa.PrivateKey) error {
 	if err != nil {
 		return err
 	}
-	block := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-	return os.WriteFile(path, block, 0600)
+	return writePEMFile(path, der, "PRIVATE KEY")
 }
 
 func writeCertFile(path string, der []byte) error {
-	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	return writePEMFile(path, der, "CERTIFICATE")
+}
+
+func writeCRLFile(path string, der []byte) error {
+	return writePEMFile(path, der, "X509 CRL")
+}
+
+func writePEMFile(path string, der []byte, kind string) error {
+	block := pem.EncodeToMemory(&pem.Block{Type: kind, Bytes: der})
 	return os.WriteFile(path, block, 0644)
 }
 

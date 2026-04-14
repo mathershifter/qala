@@ -27,7 +27,7 @@ func TestInit(t *testing.T) {
 			t.Fatalf("Init: %v", err)
 		}
 
-		loaded, err := ca.Load(dir, testLogger())
+		loaded, err := ca.LoadCA(dir, testLogger())
 		if err != nil {
 			t.Fatalf("Load after Init: %v", err)
 		}
@@ -77,7 +77,7 @@ func TestLoad(t *testing.T) {
 			t.Fatalf("Init: %v", err)
 		}
 
-		loaded, err := ca.Load(dir, testLogger())
+		loaded, err := ca.LoadCA(dir, testLogger())
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -93,7 +93,7 @@ func TestLoad(t *testing.T) {
 
 	t.Run("missing files returns error", func(t *testing.T) {
 		dir := t.TempDir()
-		_, err := ca.Load(dir, testLogger())
+		_, err := ca.LoadCA(dir, testLogger())
 		if err == nil {
 			t.Fatal("expected error loading from empty dir, got nil")
 		}
@@ -107,7 +107,7 @@ func TestSign(t *testing.T) {
 			t.Fatalf("Init: %v", err)
 		}
 
-		loaded, err := ca.Load(dir, testLogger())
+		loaded, err := ca.LoadCA(dir, testLogger())
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}

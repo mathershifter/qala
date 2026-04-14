@@ -1,6 +1,9 @@
 package cert
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // KeyAlgorithm identifies the key algorithm for a certificate.
 type KeyAlgorithm string
@@ -17,6 +20,27 @@ const (
 	TypeServer CertType = "server"
 	TypeClient CertType = "client"
 )
+
+type RevocationInfo struct {
+	RevokedAt time.Time
+	Reason    string
+}
+
+type RevokeRequest struct {
+	Serial    string    `json:"serial"`
+	RevokedAt time.Time `json:"revoked_at"`
+	Reason    string    `json:"reason"`
+}
+
+type RevokeResponse struct {
+	Serial    string
+	RevokedAt time.Time
+	Reason    string
+}
+
+// New sentinel errors
+var ErrAlreadyRevoked = errors.New("certificate is already revoked")
+var ErrUnknownReason = errors.New("unknown revocation reason")
 
 // ServerRequest carries the parameters for issuing a TLS server certificate.
 type ServerRequest struct {
@@ -37,29 +61,35 @@ type ClientRequest struct {
 // IssuedCert is the result of a successful certificate issuance.
 // PrivateKeyPEM is returned exactly once at issuance and is never persisted.
 type IssuedCert struct {
-	Serial         string    `json:"serial"`
-	Type           CertType  `json:"type"`
-	CommonName     string    `json:"common_name"`
-	CertificatePEM string    `json:"certificate_pem"`
-	PrivateKeyPEM  string    `json:"private_key_pem"`
-	ChainPEM       string    `json:"chain_pem"`
-	IssuedAt       time.Time `json:"issued_at"`
-	ExpiresAt      time.Time `json:"expires_at"`
+	Serial           string     `json:"serial"`
+	Type             CertType   `json:"type"`
+	CommonName       string     `json:"common_name"`
+	CertificatePEM   string     `json:"certificate_pem"`
+	PrivateKeyPEM    string     `json:"private_key_pem"`
+	ChainPEM         string     `json:"chain_pem"`
+	IssuedAt         time.Time  `json:"issued_at"`
+	ExpiresAt        time.Time  `json:"expires_at"`
+	RevokedAt        *time.Time `json:"revoked_at"`
+	RevocationReason string     `json:"revocation_reason"`
 }
 
 // Summary is the list-view projection of an issued certificate. No PEM fields.
 type Summary struct {
-	Serial     string    `json:"serial"`
-	Type       CertType  `json:"type"`
-	CommonName string    `json:"common_name"`
-	IssuedAt   time.Time `json:"issued_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
+	Serial           string    `json:"serial"`
+	Type             CertType  `json:"type"`
+	CommonName       string    `json:"common_name"`
+	IssuedAt         time.Time `json:"issued_at"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	RevokedAt        time.Time `json:"revoked_at"`
+	RevocationReason string    `json:"revocation_reason"`
 }
 
 // ListFilter controls which certificates are returned by List.
 type ListFilter struct {
-	Type           *CertType
-	IncludeExpired bool
-	Limit          int
-	Offset         int
+	Type    *CertType
+	All     bool
+	Expired bool
+	Revoked bool
+	Limit   int
+	Offset  int
 }

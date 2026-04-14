@@ -64,6 +64,36 @@ func (e KeyAlgorithm) Valid() bool {
 	}
 }
 
+// Defines values for RevocationReason.
+const (
+	AffiliationChanged   RevocationReason = "affiliationChanged"
+	CertificateHold      RevocationReason = "certificateHold"
+	CessationOfOperation RevocationReason = "cessationOfOperation"
+	KeyCompromise        RevocationReason = "keyCompromise"
+	Superseded           RevocationReason = "superseded"
+	Unspecified          RevocationReason = "unspecified"
+)
+
+// Valid indicates whether the value is a known member of the RevocationReason enum.
+func (e RevocationReason) Valid() bool {
+	switch e {
+	case AffiliationChanged:
+		return true
+	case CertificateHold:
+		return true
+	case CessationOfOperation:
+		return true
+	case KeyCompromise:
+		return true
+	case Superseded:
+		return true
+	case Unspecified:
+		return true
+	default:
+		return false
+	}
+}
+
 // CAChainResponse defines model for CAChainResponse.
 type CAChainResponse struct {
 	// ChainPem PEM bundle containing the Intermediate CA certificate followed by the Root CA certificate. Install this as a trusted CA anchor to validate certificates issued by this service.
@@ -165,6 +195,9 @@ type IssuedCertStored struct {
 	// PrivateKeyPem Always empty on GET responses. The private key is never stored by the service and cannot be retrieved after initial issuance.
 	PrivateKeyPem *string `json:"private_key_pem,omitempty"`
 
+	// Revocation Present on a certificate record when the certificate has been revoked. Omitted (null) when the certificate is active.
+	Revocation *RevocationInfo `json:"revocation,omitempty"`
+
 	// Serial Hex-encoded certificate serial number.
 	Serial *string `json:"serial,omitempty"`
 
@@ -174,6 +207,36 @@ type IssuedCertStored struct {
 
 // KeyAlgorithm Key algorithm to use when generating the certificate key pair. `ecdsa` uses ECDSA P-256; `rsa` uses RSA 2048. Defaults to `ecdsa`.
 type KeyAlgorithm string
+
+// RevocationInfo Present on a certificate record when the certificate has been revoked. Omitted (null) when the certificate is active.
+type RevocationInfo struct {
+	// Reason RFC 5280 CRL reason code name. Defaults to `unspecified` when omitted.
+	Reason *RevocationReason `json:"reason,omitempty"`
+
+	// RevokedAt UTC timestamp when the certificate was revoked.
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+}
+
+// RevocationReason RFC 5280 CRL reason code name. Defaults to `unspecified` when omitted.
+type RevocationReason string
+
+// RevokeRequest Optional request body for `POST /certs/{serial}/revoke`. All fields are optional; omitting the body or the `reason` field defaults to `unspecified`.
+type RevokeRequest struct {
+	// Reason RFC 5280 CRL reason code name. Defaults to `unspecified` when omitted.
+	Reason *RevocationReason `json:"reason,omitempty"`
+}
+
+// RevokeResponse Confirmation returned after a successful revocation.
+type RevokeResponse struct {
+	// Reason RFC 5280 CRL reason code name. Defaults to `unspecified` when omitted.
+	Reason *RevocationReason `json:"reason,omitempty"`
+
+	// RevokedAt UTC timestamp when the certificate was revoked.
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+
+	// Serial Hex-encoded serial number of the revoked certificate.
+	Serial *string `json:"serial,omitempty"`
+}
 
 // ServerRequest Parameters for issuing a TLS server certificate. At least one of `dns_names` or `ip_addresses` must be provided.
 type ServerRequest struct {
@@ -204,6 +267,9 @@ type Summary struct {
 	// IssuedAt UTC timestamp when the certificate was issued.
 	IssuedAt *time.Time `json:"issued_at,omitempty"`
 
+	// Revocation Present on a certificate record when the certificate has been revoked. Omitted (null) when the certificate is active.
+	Revocation *RevocationInfo `json:"revocation,omitempty"`
+
 	// Serial Hex-encoded certificate serial number.
 	Serial *string `json:"serial,omitempty"`
 
@@ -231,8 +297,14 @@ type ListCertsParams struct {
 	// Type Filter results to only server or client certificates.
 	Type *CertType `form:"type,omitempty" json:"type,omitempty"`
 
+	// Active When `true`, include active certificates in the results. Defaults to `true` (active certificates are returned).
+	Active *bool `form:"active,omitempty" json:"active,omitempty"`
+
 	// Expired When `true`, include expired certificates in the results. Defaults to `false` (only active certificates are returned).
 	Expired *bool `form:"expired,omitempty" json:"expired,omitempty"`
+
+	// Revoked When `true`, include revoked certificates in the results. Defaults to `false` (revoked certificates are hidden by default).
+	Revoked *bool `form:"revoked,omitempty" json:"revoked,omitempty"`
 
 	// Limit Maximum number of results to return. Defaults to 100.
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
@@ -249,6 +321,9 @@ type GetCertByCNParams struct {
 	// Cn The common name (CN) of the certificate to look up.
 	Cn string `form:"cn" json:"cn"`
 }
+
+// RevokeCertJSONRequestBody defines body for RevokeCert for application/json ContentType.
+type RevokeCertJSONRequestBody = RevokeRequest
 
 // SignClientJSONRequestBody defines body for SignClient for application/json ContentType.
 type SignClientJSONRequestBody = ClientRequest
@@ -273,6 +348,15 @@ type ServerInterface interface {
 	// Get a certificate by serial number
 	// (GET /certs/{serial})
 	GetCert(w http.ResponseWriter, r *http.Request, serial SerialPath)
+	// Revoke a certificate
+	// (POST /certs/{serial}/revoke)
+	RevokeCert(w http.ResponseWriter, r *http.Request, serial SerialPath)
+	// Get the current CRL (DER)
+	// (GET /crl)
+	GetCRL(w http.ResponseWriter, r *http.Request)
+	// Get the current CRL (PEM)
+	// (GET /crl.pem)
+	GetCRLPEM(w http.ResponseWriter, r *http.Request)
 	// Health check
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -323,11 +407,27 @@ func (siw *ServerInterfaceWrapper) ListCerts(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// ------------- Optional query parameter "active" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "active", r.URL.Query(), &params.Active, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "active", Err: err})
+		return
+	}
+
 	// ------------- Optional query parameter "expired" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "expired", r.URL.Query(), &params.Expired, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "expired", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "revoked" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "revoked", r.URL.Query(), &params.Revoked, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "revoked", Err: err})
 		return
 	}
 
@@ -448,6 +548,59 @@ func (siw *ServerInterfaceWrapper) GetCert(w http.ResponseWriter, r *http.Reques
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetCert(w, r, serial)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeCert operation middleware
+func (siw *ServerInterfaceWrapper) RevokeCert(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "serial" -------------
+	var serial SerialPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "serial", r.PathValue("serial"), &serial, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "serial", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeCert(w, r, serial)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCRL operation middleware
+func (siw *ServerInterfaceWrapper) GetCRL(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCRL(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCRLPEM operation middleware
+func (siw *ServerInterfaceWrapper) GetCRLPEM(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCRLPEM(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -624,6 +777,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("GET "+options.BaseURL+"/certs/by-cn", wrapper.GetCertByCN)
 	m.HandleFunc("DELETE "+options.BaseURL+"/certs/{serial}", wrapper.DeleteCert)
 	m.HandleFunc("GET "+options.BaseURL+"/certs/{serial}", wrapper.GetCert)
+	m.HandleFunc("POST "+options.BaseURL+"/certs/{serial}/revoke", wrapper.RevokeCert)
+	m.HandleFunc("GET "+options.BaseURL+"/crl", wrapper.GetCRL)
+	m.HandleFunc("GET "+options.BaseURL+"/crl.pem", wrapper.GetCRLPEM)
 	m.HandleFunc("GET "+options.BaseURL+"/health", wrapper.GetHealth)
 	m.HandleFunc("POST "+options.BaseURL+"/sign/client", wrapper.SignClient)
 	m.HandleFunc("POST "+options.BaseURL+"/sign/server", wrapper.SignServer)

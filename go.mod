@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/oapi-codegen/runtime v1.3.1
+	github.com/rs/cors v1.11.1
 	github.com/spf13/cobra v1.10.2
 	modernc.org/sqlite v1.48.0
 )

@@ -26,20 +26,27 @@ func newTestStore(t *testing.T) *store.Store {
 	return s
 }
 
-func makeIssuedCert(serial string, certType cert.CertType, cn string, expired bool) cert.IssuedCert {
+func makeIssuedCert(serial string, certType cert.CertType, cn string, expired bool, revoked bool) cert.IssuedCert {
 	issuedAt := time.Now().UTC().Truncate(time.Second)
 	expiresAt := issuedAt.Add(90 * 24 * time.Hour)
+	var revokedAt *time.Time
 	if expired {
 		expiresAt = issuedAt.Add(-24 * time.Hour)
 	}
+
+	if revoked {
+		revokedAt = new(time.Now())
+	}
 	return cert.IssuedCert{
-		Serial:         serial,
-		Type:           certType,
-		CommonName:     cn,
-		CertificatePEM: "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
-		PrivateKeyPEM:  "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
-		IssuedAt:       issuedAt,
-		ExpiresAt:      expiresAt,
+		Serial:           serial,
+		Type:             certType,
+		CommonName:       cn,
+		CertificatePEM:   "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
+		PrivateKeyPEM:    "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+		IssuedAt:         issuedAt,
+		ExpiresAt:        expiresAt,
+		RevokedAt:        revokedAt,
+		RevocationReason: "unspecified",
 	}
 }
 
@@ -50,11 +57,11 @@ func TestSaveAndGet(t *testing.T) {
 	}{
 		{
 			name:  "server cert round-trips",
-			input: makeIssuedCert("aabbcc", cert.TypeServer, "svc.lab", false),
+			input: makeIssuedCert("aabbcc", cert.TypeServer, "svc.lab", false, false),
 		},
 		{
 			name:  "client cert round-trips",
-			input: makeIssuedCert("ddeeff", cert.TypeClient, "alice", false),
+			input: makeIssuedCert("ddeeff", cert.TypeClient, "alice", false, false),
 		},
 	}
 
@@ -103,10 +110,11 @@ func TestList(t *testing.T) {
 
 	// Seed: two server certs, one client cert, one expired server cert.
 	certs := []cert.IssuedCert{
-		makeIssuedCert("s1", cert.TypeServer, "svc1.lab", false),
-		makeIssuedCert("s2", cert.TypeServer, "svc2.lab", false),
-		makeIssuedCert("c1", cert.TypeClient, "alice", false),
-		makeIssuedCert("s3-expired", cert.TypeServer, "old.lab", true),
+		makeIssuedCert("s1", cert.TypeServer, "svc1.lab", false, false),
+		makeIssuedCert("s2", cert.TypeServer, "svc2.lab", false, false),
+		makeIssuedCert("c1", cert.TypeClient, "alice", false, false),
+		makeIssuedCert("s3-expired", cert.TypeServer, "old.lab", true, false),
+		makeIssuedCert("s4-revoked", cert.TypeClient, "bob", false, true),
 	}
 	for _, c := range certs {
 		if err := s.Save(ctx, c); err != nil {
@@ -120,14 +128,19 @@ func TestList(t *testing.T) {
 		wantCount int
 	}{
 		{
-			name:      "no filter returns non-expired certs",
+			name:      "no filter returns non-expired and non-revoked certs",
 			filter:    cert.ListFilter{},
 			wantCount: 3,
 		},
 		{
-			name:      "include expired returns all",
-			filter:    cert.ListFilter{IncludeExpired: true},
+			name:      "include expired returns ",
+			filter:    cert.ListFilter{Expired: true},
 			wantCount: 4,
+		},
+		{
+			name:      "include expired and revoked returns ",
+			filter:    cert.ListFilter{Expired: true, Revoked: true},
+			wantCount: 5,
 		},
 		{
 			name: "type=server excludes client",
@@ -146,8 +159,8 @@ func TestList(t *testing.T) {
 		{
 			name: "type=server with expired",
 			filter: cert.ListFilter{
-				Type:           certTypePtr(cert.TypeServer),
-				IncludeExpired: true,
+				Type:    certTypePtr(cert.TypeServer),
+				Expired: true,
 			},
 			wantCount: 3,
 		},
@@ -190,9 +203,9 @@ func TestGetActiveByCN(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	active := makeIssuedCert("active1", cert.TypeServer, "svc.lab", false)
-	expired := makeIssuedCert("expired1", cert.TypeServer, "svc.lab", true)
-	clientCert := makeIssuedCert("client1", cert.TypeClient, "svc.lab", false)
+	active := makeIssuedCert("active1", cert.TypeServer, "svc.lab", false, false)
+	expired := makeIssuedCert("expired1", cert.TypeServer, "svc.lab", true, false)
+	clientCert := makeIssuedCert("client1", cert.TypeClient, "svc.lab", false, false)
 
 	for _, c := range []cert.IssuedCert{active, expired, clientCert} {
 		if err := s.Save(ctx, c); err != nil {
@@ -284,7 +297,7 @@ func TestDelete(t *testing.T) {
 			ctx := context.Background()
 
 			if tt.seed {
-				c := makeIssuedCert(tt.serial, cert.TypeServer, "svc.lab", false)
+				c := makeIssuedCert(tt.serial, cert.TypeServer, "svc.lab", false, false)
 				if err := s.Save(ctx, c); err != nil {
 					t.Fatalf("Save: %v", err)
 				}
