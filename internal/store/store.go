@@ -102,11 +102,11 @@ func (s *Store) List(ctx context.Context, filter cert.ListFilter) ([]cert.Summar
 	for rows.Next() {
 		var summary cert.Summary
 		var issuedStr, expiresStr string
-		var revokedAt *time.Time
-		var RevocationReason string
+		var revokedAtStr *string
+		var revocationReason string
 		var certType string
 
-		if err := rows.Scan(&summary.Serial, &certType, &summary.CommonName, &issuedStr, &expiresStr, &revokedAt, &RevocationReason); err != nil {
+		if err := rows.Scan(&summary.Serial, &certType, &summary.CommonName, &issuedStr, &expiresStr, &revokedAtStr, &revocationReason); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
 
@@ -120,10 +120,14 @@ func (s *Store) List(ctx context.Context, filter cert.ListFilter) ([]cert.Summar
 		if err != nil {
 			return nil, fmt.Errorf("parse expires_at: %w", err)
 		}
-		// summary.RevokedAt, err = time.Parse(time.RFC3339, revokedStr)
-		// if err != nil {
-		// 	return nil, fmt.Errorf("parse revoked_at: %w", err)
-		// }
+		if revokedAtStr != nil {
+			revokedAt, parseErr := time.Parse(time.RFC3339, *revokedAtStr)
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse revoked_at: %w", parseErr)
+			}
+			summary.RevokedAt = revokedAt
+		}
+		summary.RevocationReason = revocationReason
 
 		results = append(results, summary)
 	}
@@ -186,6 +190,17 @@ func (s *Store) ListRevoked(ctx context.Context) ([]cert.Summary, error) {
 }
 
 func (s *Store) Revoke(ctx context.Context, serial string, at time.Time, reason string) error {
+	var revokedAt *string
+	err := s.db.QueryRowContext(ctx, `SELECT revoked_at FROM certificates WHERE serial = ?`, serial).Scan(&revokedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %s", cert.ErrNotFound, serial)
+	}
+	if err != nil {
+		return fmt.Errorf("check revoke status: %w", err)
+	}
+	if revokedAt != nil {
+		return fmt.Errorf("%w: %s", cert.ErrAlreadyRevoked, serial)
+	}
 
 	res, err := s.db.ExecContext(ctx, `UPDATE certificates SET revoked_at = ?, revocation_reason = ? WHERE serial = ?`, at.Format(time.RFC3339), reason, serial)
 	if err != nil {

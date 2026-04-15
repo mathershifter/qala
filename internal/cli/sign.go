@@ -120,7 +120,7 @@ in which case the existing certificate and key are retrieved instead.`,
 				if parseErr != nil {
 					return err
 				}
-				err = getJSON(opts.APIURL+"/certs/"+serial, issued)
+				err = getJSON(opts.APIURL+"/certs/"+serial, &issued)
 				if err != nil {
 					return err
 				}

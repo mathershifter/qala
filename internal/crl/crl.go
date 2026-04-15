@@ -79,7 +79,7 @@ func LoadOrInitCRL(dataDir string, ca Signer) (*Service, error) {
 		template := &x509.RevocationList{
 			Number:                    big.NewInt(1),
 			ThisUpdate:                time.Now(),
-			NextUpdate:                time.Now().Add(7 * 24 * time.Hour), // Valid for 1 week
+			NextUpdate:                time.Now().Add(24 * time.Hour), // Valid for 24 hours
 			RevokedCertificateEntries: []x509.RevocationListEntry{},
 		}
 		crl, err := ca.SignCRL(template)

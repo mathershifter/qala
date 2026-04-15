@@ -120,7 +120,7 @@ type ClientRequest struct {
 	// KeyAlgorithm Key algorithm to use when generating the certificate key pair. `ecdsa` uses ECDSA P-256; `rsa` uses RSA 2048. Defaults to `ecdsa`.
 	KeyAlgorithm *KeyAlgorithm `json:"key_algorithm,omitempty"`
 
-	// ValidityDays Number of days the certificate should be valid. Must be between 1 and 365 inclusive. Defaults to 90.
+	// ValidityDays Number of days the certificate should be valid. Must be between 1 and 365 inclusive. Defaults to 365.
 	ValidityDays *int `json:"validity_days,omitempty"`
 }
 
@@ -252,7 +252,7 @@ type ServerRequest struct {
 	// KeyAlgorithm Key algorithm to use when generating the certificate key pair. `ecdsa` uses ECDSA P-256; `rsa` uses RSA 2048. Defaults to `ecdsa`.
 	KeyAlgorithm *KeyAlgorithm `json:"key_algorithm,omitempty"`
 
-	// ValidityDays Number of days the certificate should be valid. Must be between 1 and 365 inclusive. Defaults to 90.
+	// ValidityDays Number of days the certificate should be valid. Must be between 1 and 365 inclusive. Defaults to 365.
 	ValidityDays *int `json:"validity_days,omitempty"`
 }
 

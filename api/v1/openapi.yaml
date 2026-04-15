@@ -97,7 +97,7 @@ paths:
               ip_addresses:
                 - "10.0.0.42"
               key_algorithm: "ecdsa"
-              validity_days: 90
+              validity_days: 365
       responses:
         "201":
           description: Certificate issued successfully
@@ -139,7 +139,7 @@ paths:
             example:
               common_name: "alice"
               key_algorithm: "ecdsa"
-              validity_days: 90
+              validity_days: 365
       responses:
         "201":
           description: Certificate issued successfully
@@ -489,10 +489,10 @@ components:
           type: integer
           minimum: 1
           maximum: 365
-          default: 90
+          default: 365
           description: >
             Number of days the certificate should be valid. Must be between
-            1 and 365 inclusive. Defaults to 90.
+            1 and 365 inclusive. Defaults to 365.
 
     ClientRequest:
       type: object
@@ -513,10 +513,10 @@ components:
           type: integer
           minimum: 1
           maximum: 365
-          default: 90
+          default: 365
           description: >
             Number of days the certificate should be valid. Must be between
-            1 and 365 inclusive. Defaults to 90.
+            1 and 365 inclusive. Defaults to 365.
 
     IssuedCert:
       type: object

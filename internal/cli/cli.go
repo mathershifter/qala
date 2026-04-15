@@ -59,6 +59,8 @@ func newRootCmd(opts *rootOptions) *cobra.Command {
 		newGetCmd(opts),
 		newDeleteCmd(opts),
 		newCAChainCmd(opts),
+		newRevokeCmd(opts),
+		newCRLCmd(opts),
 	)
 
 	return cmd
@@ -104,8 +106,7 @@ func getJSON(url string, v any) error {
 		var errResp struct {
 			Error string `json:"error"`
 		}
-		json.Unmarshal(respBody, &errResp) //nolint:errcheck
-		if errResp.Error != "" {
+		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error != "" {
 			return fmt.Errorf("server error (%d): %s", resp.StatusCode, errResp.Error)
 		}
 		return fmt.Errorf("server error: %d", resp.StatusCode)
@@ -140,8 +141,7 @@ func postJSON(url string, body any, v any) error {
 		var errResp struct {
 			Error string `json:"error"`
 		}
-		json.Unmarshal(respBody, &errResp) //nolint:errcheck
-		if errResp.Error != "" {
+		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error != "" {
 			return fmt.Errorf("server error (%d): %s", resp.StatusCode, errResp.Error)
 		}
 		return fmt.Errorf("server error: %d", resp.StatusCode)

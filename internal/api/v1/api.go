@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
 	"gitlab.aristanetworks.com/jmather/qala/internal/cert"
+	"gitlab.aristanetworks.com/jmather/qala/internal/crl"
 )
 
 // CertService is the interface the Server requires for certificate operations.
@@ -229,6 +231,13 @@ func (s *CertsServer) RevokeCert(w http.ResponseWriter, r *http.Request, serial 
 		return
 	}
 
+	if req.Reason != "" && req.Reason != "unspecified" {
+		if crl.ReasonFromStr(req.Reason) == crl.ReasonUnspecified {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown revocation reason: %q", req.Reason))
+			return
+		}
+	}
+
 	revoked, err := s.certs.Revoke(r.Context(), string(serial), req.Reason)
 	if err != nil {
 		s.handleServiceError(w, err)
@@ -325,6 +334,10 @@ func (s *CertsServer) handleServiceError(w http.ResponseWriter, err error) {
 		})
 	case errors.Is(err, cert.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, cert.ErrAlreadyRevoked):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, cert.ErrUnknownReason):
+		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, cert.ErrInvalidRequest):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
