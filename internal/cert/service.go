@@ -41,13 +41,14 @@ type Store interface {
 // Service issues and retrieves certificates.
 type Service struct {
 	ca     Signer
+	crl    Revoker
 	store  Store
 	logger *slog.Logger
 }
 
 // NewService constructs a Service.
-func NewService(ca Signer, store Store, logger *slog.Logger) *Service {
-	return &Service{ca: ca, store: store, logger: logger}
+func NewService(ca Signer, crl Revoker, store Store, logger *slog.Logger) *Service {
+	return &Service{ca: ca, crl: crl, store: store, logger: logger}
 }
 
 // IssueServer validates the request, generates a key pair, signs a TLS server
@@ -232,6 +233,9 @@ func (s *Service) Revoke(ctx context.Context, serial string, reason string) (Sum
 	revokedAt := time.Now().UTC()
 	if err := s.store.Revoke(ctx, serial, revokedAt, reason); err != nil {
 		return Summary{}, err
+	}
+	if err := s.crl.Revoke(serial, revokedAt, reason); err != nil {
+		return Summary{}, fmt.Errorf("update CRL: %w", err)
 	}
 	s.logger.Info("certificate revoked", "serial", serial)
 	return Summary{

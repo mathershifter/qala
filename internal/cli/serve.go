@@ -44,7 +44,8 @@ func newServeCmd(opts *rootOptions) *cobra.Command {
 			c := cors.New(cors.Options{
 				AllowedOrigins: []string{"*"},
 			})
-			svc := cert.NewService(loadedCA, st, logger)
+
+			svc := cert.NewService(loadedCA, loadedCRL, st, logger)
 			srv := api.NewCertsService(svc, loadedCA, loadedCRL, logger)
 			h := api.HandlerWithOptions(srv, api.StdHTTPServerOptions{
 				ErrorHandlerFunc: api.JSONErrorHandler,

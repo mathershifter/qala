@@ -187,7 +187,7 @@ func (s *Store) ListRevoked(ctx context.Context) ([]cert.Summary, error) {
 
 func (s *Store) Revoke(ctx context.Context, serial string, at time.Time, reason string) error {
 
-	res, err := s.db.ExecContext(ctx, `UPDATE certificates SET revoked_at = ? revocation_reason = ? WHERE serial = ?`, at.Format(time.RFC3339), reason, serial)
+	res, err := s.db.ExecContext(ctx, `UPDATE certificates SET revoked_at = ?, revocation_reason = ? WHERE serial = ?`, at.Format(time.RFC3339), reason, serial)
 	if err != nil {
 		return fmt.Errorf("revoke certificate: %w", err)
 	}

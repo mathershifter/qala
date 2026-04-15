@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -127,12 +126,12 @@ func (s *Service) revoke(serial string, revokeAt time.Time, reasonCode int) erro
 		return fmt.Errorf("crl is not loaded")
 	}
 
-	ser, err := strconv.ParseInt(serial, 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid serial %s, must be numeric", serial)
+	ser := new(big.Int)
+	if _, ok := ser.SetString(serial, 16); !ok {
+		return fmt.Errorf("invalid serial %q: must be a hex string", serial)
 	}
 	s.crl.RevokedCertificateEntries = append(s.crl.RevokedCertificateEntries, x509.RevocationListEntry{
-		SerialNumber:   big.NewInt(ser),
+		SerialNumber:   ser,
 		RevocationTime: revokeAt,
 		ReasonCode:     reasonCode,
 	})
@@ -152,8 +151,8 @@ func (s *Service) CurrentCRL() []byte {
 	return s.crl.Raw
 }
 
-func (s *Service) Revoke(serial string, revokedAt time.Time, reason string) {
-	s.revoke(serial, revokedAt, int(ReasonFromStr(reason)))
+func (s *Service) Revoke(serial string, revokedAt time.Time, reason string) error {
+	return s.revoke(serial, revokedAt, int(ReasonFromStr(reason)))
 }
 
 func (s *Service) Check() error {

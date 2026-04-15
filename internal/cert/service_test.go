@@ -94,6 +94,10 @@ func (f *fakeStore) ListRevoked(ctx context.Context) ([]cert.Summary, error) {
 	})
 }
 
+type fakeRevoker struct{}
+
+func (f *fakeRevoker) Revoke(_ string, _ time.Time, _ string) error { return nil }
+
 // realSigner builds a minimal self-signed CA and uses it to sign leaf certs.
 // This exercises the PEM encoding paths in the service.
 type realSigner struct {
@@ -215,7 +219,7 @@ func TestIssueServer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			signer := newRealSigner(t)
 			store := &fakeStore{saved: tt.seed}
-			svc := cert.NewService(signer, store, testLogger())
+			svc := cert.NewService(signer, &fakeRevoker{}, store, testLogger())
 
 			issued, err := svc.IssueServer(context.Background(), tt.req)
 
@@ -285,7 +289,7 @@ func TestIssueClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := cert.NewService(newRealSigner(t), &fakeStore{saved: tt.seed}, testLogger())
+			svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, &fakeStore{saved: tt.seed}, testLogger())
 
 			issued, err := svc.IssueClient(context.Background(), tt.req)
 
@@ -310,7 +314,7 @@ func TestIssueClient(t *testing.T) {
 func TestList(t *testing.T) {
 	t.Run("delegates filter to store and applies default limit", func(t *testing.T) {
 		store := &fakeStore{listResults: []cert.Summary{{Serial: "abc", CommonName: "svc"}}}
-		svc := cert.NewService(newRealSigner(t), store, testLogger())
+		svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, store, testLogger())
 
 		results, err := svc.List(context.Background(), cert.ListFilter{})
 		if err != nil {
@@ -356,7 +360,7 @@ func TestDelete(t *testing.T) {
 					ExpiresAt:  time.Now().Add(90 * 24 * time.Hour),
 				}}
 			}
-			svc := cert.NewService(newRealSigner(t), st, testLogger())
+			svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, st, testLogger())
 
 			err := svc.Delete(context.Background(), tt.serial)
 
@@ -380,7 +384,7 @@ func TestGet(t *testing.T) {
 	t.Run("returns cert when found", func(t *testing.T) {
 		st := &fakeStore{}
 		signer := newRealSigner(t)
-		svc := cert.NewService(signer, st, testLogger())
+		svc := cert.NewService(signer, &fakeRevoker{}, st, testLogger())
 
 		// Issue one to populate the fake store.
 		issued, err := svc.IssueServer(context.Background(), cert.ServerRequest{
@@ -401,7 +405,7 @@ func TestGet(t *testing.T) {
 	})
 
 	t.Run("returns ErrNotFound for unknown serial", func(t *testing.T) {
-		svc := cert.NewService(newRealSigner(t), &fakeStore{}, testLogger())
+		svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, &fakeStore{}, testLogger())
 
 		_, err := svc.Get(context.Background(), "nope")
 		if !errors.Is(err, cert.ErrNotFound) {
