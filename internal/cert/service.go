@@ -40,15 +40,16 @@ type Store interface {
 
 // Service issues and retrieves certificates.
 type Service struct {
-	ca     Signer
-	crl    Revoker
-	store  Store
-	logger *slog.Logger
+	ca       Signer
+	crl      Revoker
+	store    Store
+	defaults CertDefaults
+	logger   *slog.Logger
 }
 
 // NewService constructs a Service.
-func NewService(ca Signer, crl Revoker, store Store, logger *slog.Logger) *Service {
-	return &Service{ca: ca, crl: crl, store: store, logger: logger}
+func NewService(ca Signer, crl Revoker, store Store, defaults CertDefaults, logger *slog.Logger) *Service {
+	return &Service{ca: ca, crl: crl, store: store, defaults: defaults, logger: logger}
 }
 
 // IssueServer validates the request, generates a key pair, signs a TLS server
@@ -64,7 +65,7 @@ func (s *Service) IssueServer(ctx context.Context, req ServerRequest) (IssuedCer
 		return IssuedCert{}, &CNConflictError{CommonName: req.CommonName, Serial: existing.Serial}
 	}
 
-	req.ValidityDays = defaultValidityDays(req.ValidityDays)
+	req.ValidityDays = s.resolveValidityDays(req.ValidityDays)
 	req.KeyAlgorithm = defaultAlgorithm(req.KeyAlgorithm)
 
 	priv, pub, err := generateKeyPair(req.KeyAlgorithm)
@@ -78,9 +79,13 @@ func (s *Service) IssueServer(ctx context.Context, req ServerRequest) (IssuedCer
 	}
 
 	now := time.Now().UTC()
+	subject := pkix.Name{CommonName: req.CommonName}
+	if s.defaults.Organization != "" {
+		subject.Organization = []string{s.defaults.Organization}
+	}
 	template := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: req.CommonName},
+		Subject:               subject,
 		NotBefore:             now,
 		NotAfter:              now.Add(time.Duration(req.ValidityDays) * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
@@ -147,7 +152,7 @@ func (s *Service) IssueClient(ctx context.Context, req ClientRequest) (IssuedCer
 		return IssuedCert{}, &CNConflictError{CommonName: req.CommonName, Serial: existing.Serial}
 	}
 
-	req.ValidityDays = defaultValidityDays(req.ValidityDays)
+	req.ValidityDays = s.resolveValidityDays(req.ValidityDays)
 	req.KeyAlgorithm = defaultAlgorithm(req.KeyAlgorithm)
 
 	priv, pub, err := generateKeyPair(req.KeyAlgorithm)
@@ -161,9 +166,13 @@ func (s *Service) IssueClient(ctx context.Context, req ClientRequest) (IssuedCer
 	}
 
 	now := time.Now().UTC()
+	subject := pkix.Name{CommonName: req.CommonName}
+	if s.defaults.Organization != "" {
+		subject.Organization = []string{s.defaults.Organization}
+	}
 	template := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: req.CommonName},
+		Subject:               subject,
 		NotBefore:             now,
 		NotAfter:              now.Add(time.Duration(req.ValidityDays) * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
@@ -298,11 +307,15 @@ func validateValidity(days int) error {
 	return nil
 }
 
-func defaultValidityDays(days int) int {
-	if days == 0 {
-		return 90
+// resolveValidityDays applies the per-request value, then the service default, then 365.
+func (s *Service) resolveValidityDays(days int) int {
+	if days != 0 {
+		return days
 	}
-	return days
+	if s.defaults.ValidityDays > 0 {
+		return s.defaults.ValidityDays
+	}
+	return 365
 }
 
 func defaultAlgorithm(alg KeyAlgorithm) KeyAlgorithm {

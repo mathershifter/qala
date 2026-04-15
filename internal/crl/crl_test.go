@@ -180,3 +180,69 @@ func TestRevoke(t *testing.T) {
 		}
 	})
 }
+
+// TestRevoke_HexSerial verifies that Revoke succeeds when given a valid
+// hex-encoded certificate serial string, as produced by the cert service.
+func TestRevoke_HexSerial(t *testing.T) {
+	tests := []struct {
+		name   string
+		serial string
+	}{
+		{name: "lowercase hex", serial: "a1b2c3d4"},
+		{name: "uppercase hex digits 0-9 only", serial: "0011223344"},
+		{name: "mixed hex a-f", serial: "deadbeef"},
+		{name: "single digit hex", serial: "f"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			signer := newRealSigner(t)
+
+			svc, err := crl.LoadOrInitCRL(dir, signer)
+			if err != nil {
+				t.Fatalf("LoadOrInitCRL: %v", err)
+			}
+
+			if err := svc.Revoke(tt.serial, time.Now().UTC(), "unspecified"); err != nil {
+				t.Errorf("Revoke(%q): unexpected error: %v", tt.serial, err)
+			}
+
+			entries := svc.List()
+			if len(entries) != 1 {
+				t.Errorf("expected 1 CRL entry, got %d", len(entries))
+			}
+		})
+	}
+}
+
+// TestRevoke_InvalidSerial verifies that Revoke returns an error when given a
+// serial string that cannot be parsed as hexadecimal.
+func TestRevoke_InvalidSerial(t *testing.T) {
+	tests := []struct {
+		name   string
+		serial string
+	}{
+		{name: "non-hex letters", serial: "xyz"},
+		{name: "contains space", serial: "ab cd"},
+		{name: "decimal with non-hex letters g-z", serial: "1009gz"},
+		{name: "empty string", serial: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			signer := newRealSigner(t)
+
+			svc, err := crl.LoadOrInitCRL(dir, signer)
+			if err != nil {
+				t.Fatalf("LoadOrInitCRL: %v", err)
+			}
+
+			err = svc.Revoke(tt.serial, time.Now().UTC(), "unspecified")
+			if err == nil {
+				t.Errorf("Revoke(%q): expected error for invalid hex serial, got nil", tt.serial)
+			}
+		})
+	}
+}

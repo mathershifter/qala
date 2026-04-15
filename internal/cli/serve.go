@@ -8,6 +8,7 @@ import (
 	api "gitlab.aristanetworks.com/jmather/qala/internal/api/v1"
 	"gitlab.aristanetworks.com/jmather/qala/internal/ca"
 	"gitlab.aristanetworks.com/jmather/qala/internal/cert"
+	"gitlab.aristanetworks.com/jmather/qala/internal/config"
 	"gitlab.aristanetworks.com/jmather/qala/internal/crl"
 	"gitlab.aristanetworks.com/jmather/qala/internal/ports"
 	"gitlab.aristanetworks.com/jmather/qala/internal/store"
@@ -41,17 +42,24 @@ func newServeCmd(opts *rootOptions) *cobra.Command {
 			}
 			defer st.Close()
 
+			cfg, err := config.Load(opts.DataDir)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			certDefaults := cert.CertDefaults{
+				Organization: cfg.CertOrg,
+				ValidityDays: cfg.DefaultValidityDays,
+			}
+
 			c := cors.New(cors.Options{
 				AllowedOrigins: []string{"*"},
 			})
 
-			svc := cert.NewService(loadedCA, loadedCRL, st, logger)
+			svc := cert.NewService(loadedCA, loadedCRL, st, certDefaults, logger)
 			srv := api.NewCertsService(svc, loadedCA, loadedCRL, logger)
 			h := api.HandlerWithOptions(srv, api.StdHTTPServerOptions{
 				ErrorHandlerFunc: api.JSONErrorHandler,
-				// Middlewares: []api.MiddlewareFunc{
-				// 	ports.CORSMiddleware,
-				// },
 			})
 
 			return ports.HTTPServer(addr, c.Handler(h), logger)

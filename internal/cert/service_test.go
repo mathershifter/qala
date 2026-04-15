@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"log/slog"
 	"math/big"
@@ -219,7 +220,7 @@ func TestIssueServer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			signer := newRealSigner(t)
 			store := &fakeStore{saved: tt.seed}
-			svc := cert.NewService(signer, &fakeRevoker{}, store, testLogger())
+			svc := cert.NewService(signer, &fakeRevoker{}, store, cert.CertDefaults{}, testLogger())
 
 			issued, err := svc.IssueServer(context.Background(), tt.req)
 
@@ -289,7 +290,7 @@ func TestIssueClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, &fakeStore{saved: tt.seed}, testLogger())
+			svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, &fakeStore{saved: tt.seed}, cert.CertDefaults{}, testLogger())
 
 			issued, err := svc.IssueClient(context.Background(), tt.req)
 
@@ -314,7 +315,7 @@ func TestIssueClient(t *testing.T) {
 func TestList(t *testing.T) {
 	t.Run("delegates filter to store and applies default limit", func(t *testing.T) {
 		store := &fakeStore{listResults: []cert.Summary{{Serial: "abc", CommonName: "svc"}}}
-		svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, store, testLogger())
+		svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, store, cert.CertDefaults{}, testLogger())
 
 		results, err := svc.List(context.Background(), cert.ListFilter{})
 		if err != nil {
@@ -360,7 +361,7 @@ func TestDelete(t *testing.T) {
 					ExpiresAt:  time.Now().Add(90 * 24 * time.Hour),
 				}}
 			}
-			svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, st, testLogger())
+			svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, st, cert.CertDefaults{}, testLogger())
 
 			err := svc.Delete(context.Background(), tt.serial)
 
@@ -380,11 +381,195 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+// TestResolveValidityDays verifies the priority order for validity days:
+// per-request value > service default > built-in fallback of 365.
+func TestResolveValidityDays(t *testing.T) {
+	tests := []struct {
+		name              string
+		requestDays       int
+		serviceDefaultDays int
+		wantDays          int
+	}{
+		{
+			name:              "per-request value takes priority over service default",
+			requestDays:       30,
+			serviceDefaultDays: 90,
+			wantDays:          30,
+		},
+		{
+			name:              "service default used when request omits validity",
+			requestDays:       0,
+			serviceDefaultDays: 180,
+			wantDays:          180,
+		},
+		{
+			name:              "built-in fallback 365 when both are zero",
+			requestDays:       0,
+			serviceDefaultDays: 0,
+			wantDays:          365,
+		},
+		{
+			name:              "per-request 1 takes priority even when service default is set",
+			requestDays:       1,
+			serviceDefaultDays: 200,
+			wantDays:          1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			signer := newRealSigner(t)
+			store := &fakeStore{}
+			defaults := cert.CertDefaults{ValidityDays: tt.serviceDefaultDays}
+			svc := cert.NewService(signer, &fakeRevoker{}, store, defaults, testLogger())
+
+			req := cert.ServerRequest{
+				CommonName:   "svc.lab",
+				DNSNames:     []string{"svc.lab"},
+				ValidityDays: tt.requestDays,
+			}
+
+			issued, err := svc.IssueServer(context.Background(), req)
+			if err != nil {
+				t.Fatalf("IssueServer: %v", err)
+			}
+
+			// Parse the certificate to check the actual validity window.
+			block, _ := pem.Decode([]byte(issued.CertificatePEM))
+			if block == nil {
+				t.Fatal("could not decode CertificatePEM")
+			}
+			parsed, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				t.Fatalf("parse cert: %v", err)
+			}
+
+			gotDays := int(parsed.NotAfter.Sub(parsed.NotBefore).Hours() / 24)
+			if gotDays != tt.wantDays {
+				t.Errorf("validity: got %d days, want %d days", gotDays, tt.wantDays)
+			}
+		})
+	}
+}
+
+// TestIssueServer_DefaultOrg verifies that when CertDefaults.Organization is
+// non-empty, the issued certificate Subject.Organization is populated accordingly.
+func TestIssueServer_DefaultOrg(t *testing.T) {
+	tests := []struct {
+		name     string
+		org      string
+		wantOrgs []string
+	}{
+		{
+			name:     "org set in defaults appears in cert subject",
+			org:      "My Lab OU",
+			wantOrgs: []string{"My Lab OU"},
+		},
+		{
+			name:     "empty org in defaults yields empty subject org",
+			org:      "",
+			wantOrgs: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			signer := newRealSigner(t)
+			store := &fakeStore{}
+			defaults := cert.CertDefaults{Organization: tt.org}
+			svc := cert.NewService(signer, &fakeRevoker{}, store, defaults, testLogger())
+
+			issued, err := svc.IssueServer(context.Background(), cert.ServerRequest{
+				CommonName: "svc.lab",
+				DNSNames:   []string{"svc.lab"},
+			})
+			if err != nil {
+				t.Fatalf("IssueServer: %v", err)
+			}
+
+			block, _ := pem.Decode([]byte(issued.CertificatePEM))
+			if block == nil {
+				t.Fatal("could not decode CertificatePEM")
+			}
+			parsed, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				t.Fatalf("parse cert: %v", err)
+			}
+
+			if len(parsed.Subject.Organization) != len(tt.wantOrgs) {
+				t.Errorf("Organization: got %v, want %v", parsed.Subject.Organization, tt.wantOrgs)
+				return
+			}
+			for i, org := range tt.wantOrgs {
+				if parsed.Subject.Organization[i] != org {
+					t.Errorf("Organization[%d]: got %q, want %q", i, parsed.Subject.Organization[i], org)
+				}
+			}
+		})
+	}
+}
+
+// TestIssueServer_DefaultValidity verifies that when CertDefaults.ValidityDays
+// is set and the per-request ValidityDays is 0, the service default is applied.
+func TestIssueServer_DefaultValidity(t *testing.T) {
+	tests := []struct {
+		name               string
+		serviceDefaultDays int
+		requestDays        int
+		wantDays           int
+	}{
+		{
+			name:               "service default 90 used when request omits validity",
+			serviceDefaultDays: 90,
+			requestDays:        0,
+			wantDays:           90,
+		},
+		{
+			name:               "request validity overrides service default",
+			serviceDefaultDays: 90,
+			requestDays:        45,
+			wantDays:           45,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			signer := newRealSigner(t)
+			store := &fakeStore{}
+			defaults := cert.CertDefaults{ValidityDays: tt.serviceDefaultDays}
+			svc := cert.NewService(signer, &fakeRevoker{}, store, defaults, testLogger())
+
+			issued, err := svc.IssueServer(context.Background(), cert.ServerRequest{
+				CommonName:   "svc.lab",
+				DNSNames:     []string{"svc.lab"},
+				ValidityDays: tt.requestDays,
+			})
+			if err != nil {
+				t.Fatalf("IssueServer: %v", err)
+			}
+
+			block, _ := pem.Decode([]byte(issued.CertificatePEM))
+			if block == nil {
+				t.Fatal("could not decode CertificatePEM")
+			}
+			parsed, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				t.Fatalf("parse cert: %v", err)
+			}
+
+			gotDays := int(parsed.NotAfter.Sub(parsed.NotBefore).Hours() / 24)
+			if gotDays != tt.wantDays {
+				t.Errorf("validity: got %d days, want %d days", gotDays, tt.wantDays)
+			}
+		})
+	}
+}
+
 func TestGet(t *testing.T) {
 	t.Run("returns cert when found", func(t *testing.T) {
 		st := &fakeStore{}
 		signer := newRealSigner(t)
-		svc := cert.NewService(signer, &fakeRevoker{}, st, testLogger())
+		svc := cert.NewService(signer, &fakeRevoker{}, st, cert.CertDefaults{}, testLogger())
 
 		// Issue one to populate the fake store.
 		issued, err := svc.IssueServer(context.Background(), cert.ServerRequest{
@@ -405,7 +590,7 @@ func TestGet(t *testing.T) {
 	})
 
 	t.Run("returns ErrNotFound for unknown serial", func(t *testing.T) {
-		svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, &fakeStore{}, testLogger())
+		svc := cert.NewService(newRealSigner(t), &fakeRevoker{}, &fakeStore{}, cert.CertDefaults{}, testLogger())
 
 		_, err := svc.Get(context.Background(), "nope")
 		if !errors.Is(err, cert.ErrNotFound) {

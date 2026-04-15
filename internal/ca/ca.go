@@ -19,6 +19,14 @@ import (
 // ErrAlreadyInitialized is returned by Init when CA files already exist.
 var ErrAlreadyInitialized = errors.New("CA already initialized")
 
+// CAConfig holds subject field configuration for the Root and Intermediate CAs.
+// Empty fields are replaced with built-in defaults inside Init.
+type CAConfig struct {
+	RootCN         string
+	IntermediateCN string
+	Organization   string
+}
+
 // CA holds the loaded Intermediate and Root CA certificates and the
 // Intermediate CA private key. The Root CA key is not kept in memory after
 // the Intermediate CA is signed.
@@ -38,7 +46,17 @@ const (
 
 // Init generates the Root CA and Intermediate CA and writes PEM files to
 // dataDir. Returns ErrAlreadyInitialized if any CA file already exists.
-func Init(dataDir string, logger *slog.Logger) error {
+// Empty CAConfig fields are replaced with built-in defaults.
+func Init(dataDir string, cfg CAConfig, logger *slog.Logger) error {
+	if cfg.RootCN == "" {
+		cfg.RootCN = "Qala Root CA"
+	}
+	if cfg.IntermediateCN == "" {
+		cfg.IntermediateCN = "Qala Intermediate CA"
+	}
+	if cfg.Organization == "" {
+		cfg.Organization = "Qala CA"
+	}
 	for _, name := range []string{rootKeyFile, rootCertFile, intKeyFile, intCertFile} {
 		if _, err := os.Stat(filepath.Join(dataDir, name)); err == nil {
 			return fmt.Errorf("%w: %s exists", ErrAlreadyInitialized, name)
@@ -63,8 +81,8 @@ func Init(dataDir string, logger *slog.Logger) error {
 	rootTemplate := &x509.Certificate{
 		SerialNumber: rootSerial,
 		Subject: pkix.Name{
-			CommonName:   "Qala Root CA",
-			Organization: []string{"Qala Lab"},
+			CommonName:   cfg.RootCN,
+			Organization: []string{cfg.Organization},
 		},
 		NotBefore:             time.Now().UTC(),
 		NotAfter:              time.Now().UTC().Add(10 * 365 * 24 * time.Hour),
@@ -97,8 +115,8 @@ func Init(dataDir string, logger *slog.Logger) error {
 	intTemplate := &x509.Certificate{
 		SerialNumber: intSerial,
 		Subject: pkix.Name{
-			CommonName:   "Qala Intermediate CA",
-			Organization: []string{"qala Lab"},
+			CommonName:   cfg.IntermediateCN,
+			Organization: []string{cfg.Organization},
 		},
 		NotBefore:             time.Now().UTC(),
 		NotAfter:              time.Now().UTC().Add(5 * 365 * 24 * time.Hour),

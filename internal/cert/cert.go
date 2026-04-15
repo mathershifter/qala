@@ -84,6 +84,14 @@ type Summary struct {
 	RevocationReason string    `json:"revocation_reason"`
 }
 
+// CertDefaults holds service-level defaults applied when per-request values are absent.
+// Organization is added to the certificate Subject when non-empty.
+// ValidityDays is used when the per-request ValidityDays is 0; if also 0, the built-in default (90) applies.
+type CertDefaults struct {
+	Organization string
+	ValidityDays int
+}
+
 // ListFilter controls which certificates are returned by List.
 type ListFilter struct {
 	Type    *CertType
