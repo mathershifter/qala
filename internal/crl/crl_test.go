@@ -7,9 +7,9 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"log/slog"
 	"math/big"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -135,9 +135,6 @@ func (r *realSigner) SignCRL(template *x509.RevocationList) (*x509.RevocationLis
 func (r *realSigner) CheckSignatureWith(fn func(*x509.Certificate) error) error {
 	return fn(r.cert)
 }
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-}
 
 func TestLoadCRL(t *testing.T) {
 	t.Run("loads CRL file written by Init", func(t *testing.T) {
@@ -244,5 +241,171 @@ func TestRevoke_InvalidSerial(t *testing.T) {
 				t.Errorf("Revoke(%q): expected error for invalid hex serial, got nil", tt.serial)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RevocationReason.String()
+// ---------------------------------------------------------------------------
+
+func TestRevocationReasonString(t *testing.T) {
+	tests := []struct {
+		reason crl.RevocationReason
+		want   string
+	}{
+		{crl.ReasonUnspecified, "unspecified"},
+		{crl.ReasonKeyCompromise, "keyCompromise"},
+		{crl.ReasonAffiliationChanged, "affiliationChanged"},
+		{crl.ReasonSuperseded, "superseded"},
+		{crl.ReasonCessationOfOperation, "cessationOfOperation"},
+		{crl.ReasonCertificateHold, "certificateHold"},
+		// Unknown value falls through to default.
+		{crl.RevocationReason(99), "unspecified"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := tt.reason.String()
+			if got != tt.want {
+				t.Errorf("RevocationReason(%d).String() = %q, want %q", int(tt.reason), got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ReasonFromStr — all spec-defined values
+// ---------------------------------------------------------------------------
+
+func TestReasonFromStr(t *testing.T) {
+	tests := []struct {
+		input string
+		want  crl.RevocationReason
+	}{
+		{"keyCompromise", crl.ReasonKeyCompromise},
+		{"affiliationChanged", crl.ReasonAffiliationChanged},
+		{"superseded", crl.ReasonSuperseded},
+		{"cessationOfOperation", crl.ReasonCessationOfOperation},
+		{"certificateHold", crl.ReasonCertificateHold},
+		// Unknown / empty strings map to unspecified.
+		{"unspecified", crl.ReasonUnspecified},
+		{"", crl.ReasonUnspecified},
+		{"bogus", crl.ReasonUnspecified},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input+"->"+tt.want.String(), func(t *testing.T) {
+			got := crl.ReasonFromStr(tt.input)
+			if got != tt.want {
+				t.Errorf("ReasonFromStr(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CurrentCRL when CRL exists (raw bytes returned)
+// ---------------------------------------------------------------------------
+
+func TestCurrentCRL_NonEmpty(t *testing.T) {
+	dir := t.TempDir()
+	signer := newRealSigner(t)
+
+	svc, err := crl.LoadOrInitCRL(dir, signer)
+	if err != nil {
+		t.Fatalf("LoadOrInitCRL: %v", err)
+	}
+
+	der := svc.CurrentCRL()
+	if len(der) == 0 {
+		t.Error("expected non-empty DER bytes from CurrentCRL after init")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// List when CRL is populated
+// ---------------------------------------------------------------------------
+
+func TestList_AfterRevocations(t *testing.T) {
+	dir := t.TempDir()
+	signer := newRealSigner(t)
+
+	svc, err := crl.LoadOrInitCRL(dir, signer)
+	if err != nil {
+		t.Fatalf("LoadOrInitCRL: %v", err)
+	}
+
+	// Initially empty.
+	if entries := svc.List(); len(entries) != 0 {
+		t.Errorf("expected 0 entries before any revocations, got %d", len(entries))
+	}
+
+	// Add two revocations.
+	if err := svc.Revoke("aabb", time.Now().UTC(), "keyCompromise"); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if err := svc.Revoke("ccdd", time.Now().UTC(), "superseded"); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	entries := svc.List()
+	if len(entries) != 2 {
+		t.Errorf("expected 2 entries, got %d", len(entries))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// LoadOrInitCRL — loads a pre-existing PEM file written to disk
+// ---------------------------------------------------------------------------
+
+func TestLoadOrInitCRL_LoadsExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	signer := newRealSigner(t)
+
+	// First call creates and saves the CRL.
+	svc1, err := crl.LoadOrInitCRL(dir, signer)
+	if err != nil {
+		t.Fatalf("first LoadOrInitCRL: %v", err)
+	}
+	// Revoke something so the CRL on disk has content.
+	if err := svc1.Revoke("beef01", time.Now().UTC(), "unspecified"); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	// Second call should load from the PEM file on disk.
+	svc2, err := crl.LoadOrInitCRL(dir, signer)
+	if err != nil {
+		t.Fatalf("second LoadOrInitCRL: %v", err)
+	}
+
+	// The revoked entry should be present in the reloaded CRL.
+	entries := svc2.List()
+	if len(entries) != 1 {
+		t.Errorf("expected 1 entry after reload, got %d", len(entries))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// read — malformed PEM file
+// ---------------------------------------------------------------------------
+
+func TestLoadOrInitCRL_BadPEMFile_FallsBackToNew(t *testing.T) {
+	dir := t.TempDir()
+	signer := newRealSigner(t)
+
+	// Write garbage into crl.pem; LoadOrInitCRL should fall back to a new CRL.
+	crlPath := filepath.Join(dir, "crl.pem")
+	if err := os.WriteFile(crlPath, []byte("not-valid-pem"), 0644); err != nil {
+		t.Fatalf("write bad pem: %v", err)
+	}
+
+	// This should not fail — it should create a new CRL when reading fails.
+	svc, err := crl.LoadOrInitCRL(dir, signer)
+	if err != nil {
+		t.Fatalf("LoadOrInitCRL with bad PEM: %v", err)
+	}
+
+	if svc.CurrentCRL() == nil {
+		t.Error("expected non-nil CRL after fallback init")
 	}
 }

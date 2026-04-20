@@ -100,8 +100,11 @@ func (s *Service) read(dataDir string) error {
 	}
 
 	block, _ := pem.Decode(data)
-	if block == nil || block.Type != "X509 CRL" {
-		return fmt.Errorf("failed to decode PEM block containing CRL: %#v", block.Type)
+	if block == nil {
+		return fmt.Errorf("failed to decode PEM block containing CRL: no PEM data found")
+	}
+	if block.Type != "X509 CRL" {
+		return fmt.Errorf("failed to decode PEM block containing CRL: unexpected type %#v", block.Type)
 	}
 
 	crl, err := x509.ParseRevocationList(block.Bytes)
@@ -118,7 +121,8 @@ func (s *Service) save() error {
 	if s.crl == nil {
 		return fmt.Errorf("crl is not loaded")
 	}
-	return os.WriteFile(filepath.Join(s.dataDir, crlFile), s.crl.Raw, 0644)
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: s.crl.Raw})
+	return os.WriteFile(filepath.Join(s.dataDir, crlFile), pemData, 0644)
 }
 
 func (s *Service) revoke(serial string, revokeAt time.Time, reasonCode int) error {

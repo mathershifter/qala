@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -305,4 +306,165 @@ func TestSign(t *testing.T) {
 			t.Errorf("DNSNames: got %v", signed.DNSNames)
 		}
 	})
+}
+
+// TestSignCRL verifies that a loaded CA can sign a RevocationList and the
+// result parses correctly.
+func TestSignCRL(t *testing.T) {
+	dir := t.TempDir()
+	if err := ca.Init(dir, ca.CAConfig{}, testLogger()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	loaded, err := ca.LoadCA(dir, testLogger())
+	if err != nil {
+		t.Fatalf("LoadCA: %v", err)
+	}
+
+	template := &x509.RevocationList{
+		Number:                    big.NewInt(1),
+		ThisUpdate:                time.Now().UTC(),
+		NextUpdate:                time.Now().UTC().Add(24 * time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{},
+	}
+
+	crl, err := loaded.SignCRL(template)
+	if err != nil {
+		t.Fatalf("SignCRL: %v", err)
+	}
+
+	if crl == nil {
+		t.Fatal("SignCRL returned nil")
+	}
+	if len(crl.Raw) == 0 {
+		t.Error("signed CRL has empty Raw bytes")
+	}
+}
+
+// TestCheckSignatureWith verifies that CheckSignatureWith passes the intermediate
+// CA cert to the provided callback.
+func TestCheckSignatureWith(t *testing.T) {
+	dir := t.TempDir()
+	if err := ca.Init(dir, ca.CAConfig{}, testLogger()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	loaded, err := ca.LoadCA(dir, testLogger())
+	if err != nil {
+		t.Fatalf("LoadCA: %v", err)
+	}
+
+	var capturedCN string
+	err = loaded.CheckSignatureWith(func(cert *x509.Certificate) error {
+		capturedCN = cert.Subject.CommonName
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CheckSignatureWith: %v", err)
+	}
+
+	// The intermediate CA cert CN should be the default.
+	if capturedCN != "Qala Intermediate CA" {
+		t.Errorf("expected CN %q, got %q", "Qala Intermediate CA", capturedCN)
+	}
+}
+
+// TestSigned verifies that a leaf certificate signed by the CA is recognized
+// as signed, and that an unrelated cert is not.
+func TestSigned(t *testing.T) {
+	dir := t.TempDir()
+	if err := ca.Init(dir, ca.CAConfig{}, testLogger()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	loaded, err := ca.LoadCA(dir, testLogger())
+	if err != nil {
+		t.Fatalf("LoadCA: %v", err)
+	}
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate leaf key: %v", err)
+	}
+
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		t.Fatalf("generate serial: %v", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "signed.lab"},
+		DNSNames:              []string{"signed.lab"},
+		NotBefore:             time.Now().UTC(),
+		NotAfter:              time.Now().UTC().Add(90 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	signed, err := loaded.Sign(template, &leafKey.PublicKey)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	// A cert signed by this CA should be recognized.
+	if !loaded.Signed(signed) {
+		t.Error("expected Signed=true for a cert signed by this CA")
+	}
+
+	// A self-signed unrelated cert should not be recognized.
+	unrelatedKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	unrelatedSerial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	unrelatedTemplate := &x509.Certificate{
+		SerialNumber:          unrelatedSerial,
+		Subject:               pkix.Name{CommonName: "unrelated.lab"},
+		NotBefore:             time.Now().UTC(),
+		NotAfter:              time.Now().UTC().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	unrelatedDER, _ := x509.CreateCertificate(rand.Reader, unrelatedTemplate, unrelatedTemplate, &unrelatedKey.PublicKey, unrelatedKey)
+	unrelated, _ := x509.ParseCertificate(unrelatedDER)
+
+	if loaded.Signed(unrelated) {
+		t.Error("expected Signed=false for a self-signed unrelated cert")
+	}
+}
+
+// TestCertPEM verifies that CertPEM returns a valid PEM-encoded certificate.
+func TestCertPEM(t *testing.T) {
+	dir := t.TempDir()
+	if err := ca.Init(dir, ca.CAConfig{}, testLogger()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	loaded, err := ca.LoadCA(dir, testLogger())
+	if err != nil {
+		t.Fatalf("LoadCA: %v", err)
+	}
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "pem.lab"},
+		DNSNames:              []string{"pem.lab"},
+		NotBefore:             time.Now().UTC(),
+		NotAfter:              time.Now().UTC().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+
+	signed, err := loaded.Sign(template, &leafKey.PublicKey)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	pemStr := loaded.CertPEM(signed)
+
+	if !strings.HasPrefix(pemStr, "-----BEGIN CERTIFICATE-----") {
+		t.Errorf("expected PEM header, got: %s", pemStr[:min(50, len(pemStr))])
+	}
+	if !strings.Contains(pemStr, "-----END CERTIFICATE-----") {
+		t.Error("expected PEM footer in output")
+	}
 }
