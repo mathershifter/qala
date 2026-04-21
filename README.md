@@ -8,6 +8,16 @@ A lightweight Certificate Signing Service for lab environments. Runs a two-tier 
 - [Building](#building)
 - [Running with Docker](#running-with-docker)
 - [CLI Reference](#cli-reference)
+  - [qala init](#qala-init)
+  - [qala serve](#qala-serve)
+  - [qala sign server](#qala-sign-server)
+  - [qala sign client](#qala-sign-client)
+  - [qala get](#qala-get)
+  - [qala list](#qala-list)
+  - [qala delete](#qala-delete)
+  - [qala revoke](#qala-revoke)
+  - [qala ca-chain](#qala-ca-chain)
+  - [qala crl](#qala-crl)
 - [REST API Reference](#rest-api-reference)
 - [Configuration](#configuration)
 - [File Layout](#file-layout)
@@ -37,7 +47,7 @@ qala ca-chain --out /usr/local/share/ca-certificates/qala.pem
 
 ## Building
 
-Requires Go 1.22+. No CGo — the binary is fully statically linked.
+Requires Go 1.26+. No CGo — the binary is fully statically linked.
 
 ```sh
 go build -o qala ./cmd/qala
@@ -53,15 +63,15 @@ CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o qala ./cmd/qala
 
 ## Running with Docker
 
-The Docker image handles `init` automatically on first start. Mount a volume at `/data` to persist the CA and database across container restarts.
+The Docker image is published to `ghcr.io` and handles `init` automatically on first start. Mount a volume at `/data` to persist the CA and database across container restarts.
 
 ```sh
-# First run: initializes CA, then starts the server
+# Pull and run from the registry
 docker run -d \
   --name qala \
   -v qala-data:/data \
   -p 8080:8080 \
-  qala:latest
+  ghcr.io/jmather/qala:latest
 
 # Use the CLI against a running container
 docker exec qala qala sign server \
@@ -70,7 +80,7 @@ docker exec qala qala sign server \
   --api-url http://localhost:8080
 ```
 
-Build the image:
+Build the image locally:
 
 ```sh
 docker build -t qala:latest .
@@ -106,6 +116,14 @@ Generates the Root CA and Intermediate CA key pairs and certificates. Run once b
 qala init [--data-dir ./data]
 ```
 
+| Flag | Env var | Default | Description |
+|---|---|---|---|
+| `--ca-org` | `QALA_CA_ORG` | `Qala CA` | Organization name in Root CA and Intermediate CA subjects |
+| `--ca-cn-root` | `QALA_CA_CN_ROOT` | `Qala Root CA` | Common name for Root CA |
+| `--ca-cn-intermediate` | `QALA_CA_CN_INTERMEDIATE` | `Qala Intermediate CA` | Common name for Intermediate CA |
+| `--cert-org` | `QALA_CERT_ORG` | `Qala Default OU` | Default Organization for issued leaf certificates |
+| `--default-validity-days` | `QALA_DEFAULT_VALIDITY_DAYS` | `365` | Default validity days for issued certificates (1–365) |
+
 Output files written to `--data-dir`:
 
 ```
@@ -113,6 +131,7 @@ root-ca.key.pem           Root CA private key  (keep offline after init)
 root-ca.cert.pem          Root CA certificate
 intermediate-ca.key.pem   Intermediate CA private key
 intermediate-ca.cert.pem  Intermediate CA certificate
+config.json               Operational config read by serve
 ```
 
 Returns an error if the CA files already exist.
@@ -157,7 +176,7 @@ qala sign server --cn <common-name> [flags]
 | `--dns` | | DNS SAN — repeatable |
 | `--ip` | | IP SAN — repeatable |
 | `--algo` | `ecdsa` | Key algorithm: `ecdsa` or `rsa` |
-| `--days` | `90` | Validity in days (1–365) |
+| `--days` | `365` | Validity in days (1–365) |
 | `--out` | `.` | Output directory for PEM files |
 | `--reuse` | `false` | Retrieve existing cert if CN is already active |
 
@@ -204,7 +223,7 @@ qala sign client --cn <identity> [flags]
 |---|---|---|
 | `--cn` | (required) | Client identity (e.g. username or service name) |
 | `--algo` | `ecdsa` | Key algorithm: `ecdsa` or `rsa` |
-| `--days` | `90` | Validity in days (1–365) |
+| `--days` | `365` | Validity in days (1–365) |
 | `--out` | `.` | Output directory for PEM files |
 | `--reuse` | `false` | Retrieve existing cert if CN is already active |
 
@@ -226,18 +245,47 @@ qala sign client --cn alice --reuse --out ./certs/alice
 
 ---
 
+### `qala get`
+
+Fetches an active certificate by common name without knowing its serial. Writes `cert.pem` and `chain.pem` to `--out`. The `key.pem` file will be empty because private keys are not stored by the service after issuance — use `sign --reuse` if you need the key.
+
+```sh
+qala get server --cn <common-name> [--out <dir>]
+qala get client --cn <common-name> [--out <dir>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--cn` | (required) | Common name to look up |
+| `--out` | `.` | Output directory for PEM files |
+
+**Examples:**
+
+```sh
+# Fetch an existing server cert
+qala get server --cn api.lab --out ./certs/api
+
+# Fetch an existing client cert
+qala get client --cn alice --out ./certs/alice
+```
+
+Exits with an error if no active certificate exists for the given CN and type.
+
+---
+
 ### `qala list`
 
 Lists issued certificates.
 
 ```sh
-qala list [--type server|client] [--expired]
+qala list [--type server|client] [--expired] [--quiet|-q]
 ```
 
 | Flag | Description |
 |---|---|
 | `--type` | Filter by `server` or `client` |
 | `--expired` | Include expired certificates (default: active only) |
+| `--quiet`, `-q` | Output only serial numbers, one per line |
 
 **Examples:**
 
@@ -250,6 +298,10 @@ qala list --type server
 
 # List all client certificates including expired ones
 qala list --type client --expired
+
+# Output only serials (useful for scripting)
+qala list --quiet
+qala list --type server -q
 ```
 
 Sample output:
@@ -266,7 +318,9 @@ Total: 2
 
 ### `qala delete`
 
-Deletes a certificate record by serial. The serial is shown in `qala list` output and is returned by all sign responses.
+Permanently removes a certificate record from the database by serial. The serial is shown in `qala list` output and is returned by all sign responses.
+
+This does **not** revoke the certificate or update the CRL. To revoke and add to the CRL, use `qala revoke`.
 
 ```sh
 qala delete <serial>
@@ -283,7 +337,44 @@ qala list --type server
 qala delete 3a2f1b...
 ```
 
-After deletion the CN is free to be re-issued. There is no revocation — if the certificate was distributed to clients, remove it from those trust stores separately.
+After deletion the CN is free to be re-issued.
+
+---
+
+### `qala revoke`
+
+Revokes a certificate, records the reason, and regenerates the CRL. The record is retained for audit purposes and CRL inclusion.
+
+```sh
+qala revoke <serial> [--reason <reason>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--reason` | `unspecified` | RFC 5280 reason code (see below) |
+
+Valid reason codes:
+
+| Reason | Description |
+|---|---|
+| `unspecified` | No specific reason given (default) |
+| `keyCompromise` | Private key was compromised |
+| `affiliationChanged` | Subject's affiliation changed |
+| `superseded` | Certificate has been superseded |
+| `cessationOfOperation` | Subject has ceased operation |
+| `certificateHold` | Certificate is on hold |
+
+**Examples:**
+
+```sh
+# Revoke with default reason
+qala revoke 3a2f1b...
+
+# Revoke with a specific reason
+qala revoke 3a2f1b... --reason keyCompromise
+```
+
+Prints confirmation with serial, revoked_at, and reason on success.
 
 ---
 
@@ -315,6 +406,34 @@ sudo update-ca-certificates
 # Trust on RHEL/Fedora
 qala ca-chain --out /etc/pki/ca-trust/source/anchors/qala.pem
 sudo update-ca-trust
+```
+
+---
+
+### `qala crl`
+
+Fetches the current Certificate Revocation List from the server.
+
+```sh
+qala crl [--format der|pem] [--out <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--format` | `pem` | Output format: `pem` or `der` |
+| `--out` | stdout | Output file path |
+
+**Examples:**
+
+```sh
+# Print CRL in PEM format to stdout
+qala crl
+
+# Save DER-format CRL to a file
+qala crl --format der --out crl.der
+
+# Save PEM-format CRL to a file
+qala crl --out crl.pem
 ```
 
 ---
@@ -367,7 +486,7 @@ curl -s -X POST http://localhost:8080/sign/server \
     "dns_names": ["api.lab", "api"],
     "ip_addresses": ["10.0.0.10"],
     "key_algorithm": "ecdsa",
-    "validity_days": 90
+    "validity_days": 365
   }'
 ```
 
@@ -377,7 +496,7 @@ curl -s -X POST http://localhost:8080/sign/server \
 | `dns_names` | []string | no | DNS SANs |
 | `ip_addresses` | []string | no | IP SANs |
 | `key_algorithm` | string | no | `ecdsa` (default) or `rsa` |
-| `validity_days` | int | no | 1–365, default 90 |
+| `validity_days` | int | no | 1–365, default 365 |
 
 At least one of `dns_names` or `ip_addresses` is required.
 
@@ -396,11 +515,13 @@ At least one of `dns_names` or `ip_addresses` is required.
 }
 ```
 
+> **Note:** The private key is returned exactly once at issuance and is never returned by GET endpoints. Store it securely.
+
 **Response `409 Conflict`** (CN already has an active certificate):
 
 ```json
 {
-  "error": "active certificate already exists for this common name: cn=\"api.lab\" serial=3a2f1b...",
+  "error": "active certificate already exists for this common name",
   "serial": "3a2f1b..."
 }
 ```
@@ -419,7 +540,7 @@ curl -s -X POST http://localhost:8080/sign/client \
   -d '{
     "common_name": "alice",
     "key_algorithm": "ecdsa",
-    "validity_days": 90
+    "validity_days": 365
   }'
 ```
 
@@ -427,11 +548,11 @@ curl -s -X POST http://localhost:8080/sign/client \
 |---|---|---|---|
 | `common_name` | string | yes | Client identity |
 | `key_algorithm` | string | no | `ecdsa` (default) or `rsa` |
-| `validity_days` | int | no | 1–365, default 90 |
+| `validity_days` | int | no | 1–365, default 365 |
 
 **Response `201 Created`:** Same shape as `POST /sign/server`.
 
-**Response `409 Conflict`:** Same shape as `POST /sign/server`.
+**Response `409 Conflict`:** Same shape as `POST /sign/server` — includes `serial`.
 
 ---
 
@@ -449,6 +570,9 @@ curl "http://localhost:8080/certs?type=server"
 # Include expired
 curl "http://localhost:8080/certs?expired=true"
 
+# Include revoked
+curl "http://localhost:8080/certs?revoked=true"
+
 # Pagination
 curl "http://localhost:8080/certs?limit=20&offset=40"
 ```
@@ -457,6 +581,7 @@ curl "http://localhost:8080/certs?limit=20&offset=40"
 |---|---|
 | `type` | `server` or `client` |
 | `expired` | `true` to include expired (default: active only) |
+| `revoked` | `true` to include revoked (default: excluded) |
 | `limit` | Max results (default: 100) |
 | `offset` | Pagination offset (default: 0) |
 
@@ -470,30 +595,30 @@ curl "http://localhost:8080/certs?limit=20&offset=40"
       "type": "server",
       "common_name": "api.lab",
       "issued_at": "2026-04-01T12:00:00Z",
-      "expires_at": "2026-06-30T12:00:00Z"
+      "expires_at": "2026-06-30T12:00:00Z",
+      "revocation": null
     }
   ],
   "total": 1
 }
 ```
 
----
+The `revocation` field is `null` for active certificates. When a certificate has been revoked it contains:
 
-### `GET /certs/{serial}`
-
-Returns the full certificate record including the private key.
-
-```sh
-curl http://localhost:8080/certs/3a2f1b...
+```json
+{
+  "revocation": {
+    "revoked_at": "2026-04-08T14:00:00Z",
+    "reason": "keyCompromise"
+  }
+}
 ```
-
-**Response `200 OK`:** Full `IssuedCert` object (same shape as the sign response).
 
 ---
 
 ### `GET /certs/by-cn`
 
-Returns the active certificate for a CN without knowing its serial. Includes the private key.
+Returns the most recent active certificate matching a given common name and type. Both `type` and `cn` are required. The `private_key_pem` field is always empty because private keys are not returned by GET endpoints.
 
 ```sh
 # Look up a server certificate by CN
@@ -508,13 +633,41 @@ curl "http://localhost:8080/certs/by-cn?type=client&cn=alice"
 | `type` | yes | `server` or `client` |
 | `cn` | yes | The common name to look up |
 
-**Response `200 OK`:** Full `IssuedCert` object. Returns `404` if no active certificate exists for the CN.
+**Response `200 OK`:** Full certificate record (same shape as `GET /certs/{serial}`).
+
+Returns `400` if `type` is missing or invalid. Returns `404` if no active certificate exists for the given CN and type.
+
+---
+
+### `GET /certs/{serial}`
+
+Returns the full certificate record. The `private_key_pem` field is always empty because private keys are not returned after initial issuance.
+
+```sh
+curl http://localhost:8080/certs/3a2f1b...
+```
+
+**Response `200 OK`:**
+
+```json
+{
+  "serial": "3a2f1b...",
+  "type": "server",
+  "common_name": "api.lab",
+  "certificate_pem": "-----BEGIN CERTIFICATE-----\n...",
+  "private_key_pem": "",
+  "chain_pem": "-----BEGIN CERTIFICATE-----\n...",
+  "issued_at": "2026-04-01T12:00:00Z",
+  "expires_at": "2026-06-30T12:00:00Z",
+  "revocation": null
+}
+```
 
 ---
 
 ### `DELETE /certs/{serial}`
 
-Deletes a certificate record. After deletion the CN is free to be re-issued.
+Permanently removes a certificate record from the database. This does **not** revoke the certificate or update the CRL. To revoke and add to the CRL, use `POST /certs/{serial}/revoke`.
 
 ```sh
 curl -s -X DELETE http://localhost:8080/certs/3a2f1b...
@@ -526,6 +679,62 @@ curl -s -X DELETE http://localhost:8080/certs/3a2f1b...
 
 ---
 
+### `POST /certs/{serial}/revoke`
+
+Marks a certificate as revoked, records the reason, and regenerates the CRL. The record is retained in the database for audit purposes and CRL inclusion.
+
+```sh
+curl -s -X POST http://localhost:8080/certs/3a2f1b.../revoke \
+  -H 'Content-Type: application/json' \
+  -d '{"reason": "keyCompromise"}'
+```
+
+**Request body (optional):**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reason` | string | no | RFC 5280 reason code. Default: `unspecified`. |
+
+Valid reason codes: `unspecified`, `keyCompromise`, `affiliationChanged`, `superseded`, `cessationOfOperation`, `certificateHold`.
+
+**Response `200 OK`:**
+
+```json
+{
+  "serial": "3a2f1b...",
+  "revoked_at": "2026-04-08T14:00:00Z",
+  "reason": "keyCompromise"
+}
+```
+
+| Status | Condition |
+|---|---|
+| `400` | Unknown reason code |
+| `404` | Serial not found |
+| `409` | Certificate already revoked |
+
+---
+
+### `GET /crl`
+
+Returns the current Certificate Revocation List signed by the Intermediate CA in DER format (`application/pkix-crl`). The CRL is valid for 24 hours and is regenerated on each revocation.
+
+```sh
+curl -o crl.der http://localhost:8080/crl
+```
+
+---
+
+### `GET /crl.pem`
+
+Returns the same CRL as `GET /crl` but PEM-encoded (`application/x-pem-file`).
+
+```sh
+curl http://localhost:8080/crl.pem
+```
+
+---
+
 ### Error responses
 
 All errors return:
@@ -534,14 +743,13 @@ All errors return:
 {"error": "error-description"}
 ```
 
-Conflict responses (`409`) additionally include `"serial"`.
+Conflict responses (`409`) from sign endpoints additionally include `"serial"`.
 
 | Status | Description |
 |---|---|
-| `204` | Delete successful |
-| `400` | Invalid request (missing fields, bad values) |
+| `400` | Invalid request (missing fields, bad values, unknown reason code) |
 | `404` | Certificate not found |
-| `409` | Active certificate already exists for this CN |
+| `409` | Active certificate already exists for this CN (issuance), or certificate already revoked (revoke) |
 | `500` | Internal server error |
 
 ---
@@ -557,15 +765,19 @@ All settings can be provided as flags or environment variables.
 | `--log-level` | `QALA_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `--api-url` | `QALA_API_URL` | `http://localhost:8080` | Server URL for CLI client commands |
 
+Certificate defaults (`cert_org`, `default_validity_days`) are set once at `init` time via `--cert-org` and `--default-validity-days`, persisted to `config.json`, and read by `serve` on startup.
+
 ---
 
 ## File Layout
 
 ```
 <data-dir>/                   Default: ./data
-  root-ca.key.pem             Root CA private key  ← keep offline
+  root-ca.key.pem             Root CA private key  (keep offline after init)
   root-ca.cert.pem            Root CA certificate
   intermediate-ca.key.pem     Intermediate CA private key
   intermediate-ca.cert.pem    Intermediate CA certificate
-  qala.db                   SQLite database (cert records + private keys)
+  crl.pem                     Current CRL signed by the Intermediate CA
+  config.json                 Operational config written by init, read by serve
+  qala.db                     SQLite database (cert records)
 ```
